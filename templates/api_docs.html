@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}API documentation{% endblock %}
+{% block content %}
+<style>
+  .doc pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--idle-bg); padding: 10px 12px; border-radius: 8px; font-size: 13px; margin: 6px 0 12px; }
+  .doc h3 { margin-top: 18px; }
+  .doc .ep { display: inline-block; font: 700 13px/1 ui-monospace, Consolas, monospace; padding: 4px 8px; border-radius: 6px; margin-right: 6px; }
+  .doc .get { background: var(--ok-bg); color: var(--ok); } .doc .post { background: var(--info-bg); color: var(--info); }
+  .doc td code, .doc p code { overflow-wrap: anywhere; }
+</style>
+<div class="doc">
+<div class="page-head"><div><h1>NetraAttend API v1</h1>
+  <p class="muted">For punching machines, payroll and HR software. Base URL: <code>{{ base_url }}/api/v1</code></p></div></div>
+
+<div class="card">
+  <h2>Authentication</h2>
+  <p>Every request sends an API key in a header. The admin creates keys on the <b>API</b> page of NetraAttend.</p>
+  <pre>X-API-Key: na_xxxxxxxxxxxxxxxx        (or: Authorization: Bearer na_xxxxxxxxxxxxxxxx)</pre>
+  <table class="table">
+    <tr><th>Permission</th><th>Allows</th></tr>
+    <tr><td><code>read</code></td><td>All GET endpoints</td></tr>
+    <tr><td><code>punch</code></td><td><code>POST /punches</code> (machines sending attendance)</td></tr>
+  </table>
+  <p class="small muted">Limit: {{ rate }} requests per minute per key. Use https when calling from outside the office. All times are office local time (IST), format <code>YYYY-MM-DD HH:MM:SS</code>. The employee is always identified by <code>emp_code</code> (the Employee ID) - keep it the same in every system.</p>
+  <h3>Errors</h3>
+  <pre>{"ok": false, "error": "Invalid or revoked API key."}</pre>
+  <p class="small">401 missing / wrong key · 403 key lacks the permission · 400 bad input · 404 unknown employee or endpoint · 429 too many requests</p>
+</div>
+
+<div class="card">
+  <h2><span class="ep get">GET</span>/employees</h2>
+  <p>Employee list. <code>?active=true</code> = active only.</p>
+  <pre>curl -H "X-API-Key: KEY" "{{ base_url }}/api/v1/employees?active=true"</pre>
+  <pre>{"ok": true, "count": 2, "employees": [
+  {"emp_code": "102", "name": "amit", "department": "aiml", "active": true,
+   "field_allowed": false, "face_registered": true}, ...]}</pre>
+</div>
+
+<div class="card">
+  <h2><span class="ep get">GET</span>/attendance</h2>
+  <p>Day-wise attendance with the office rules applied (on time / late / half day / leave / absent) and a per-employee summary.</p>
+  <table class="table">
+    <tr><th>Parameter</th><th></th></tr>
+    <tr><td><code>from</code>, <code>to</code></td><td>YYYY-MM-DD (default today; max {{ max_days }} days)</td></tr>
+    <tr><td><code>emp_code</code></td><td>optional - one employee</td></tr>
+  </table>
+  <pre>curl -H "X-API-Key: KEY" "{{ base_url }}/api/v1/attendance?from=2026-10-01&amp;to=2026-10-31"</pre>
+  <pre>{"ok": true, "from": "2026-10-01", "to": "2026-10-31",
+ "days": [{"emp_code": "102", "name": "amit", "department": "aiml", "date": "2026-10-16",
+           "in": "10:38", "out": "19:05", "worked_minutes": 507, "status": "On Time",
+           "late_minutes": 0, "leave": null, "punches": 3, "source": "camera"}, ...],
+ "summary": [{"emp_code": "102", "name": "amit", "present": 20, "on_time": 17, "late": 3,
+              "half_day": 0, "leave": 1, "absent": 1, "late_minutes": 64, "worked_minutes": 10140}]}</pre>
+  <p class="small muted"><code>status</code> is one of: On Time, Late, Half Day, Leave, Absent, Weekly Off, Holiday, Not In Yet. <code>worked_minutes</code> = first IN to last OUT (null when there is no OUT).</p>
+</div>
+
+<div class="card">
+  <h2><span class="ep get">GET</span>/punches</h2>
+  <p>Every IN / OUT punch (camera, field app, machines, manual), oldest first - use it to sync incrementally.</p>
+  <table class="table">
+    <tr><th>Parameter</th><th></th></tr>
+    <tr><td><code>since</code></td><td>return punches after this time (default: start of today)</td></tr>
+    <tr><td><code>until</code></td><td>optional end time</td></tr>
+    <tr><td><code>emp_code</code></td><td>optional</td></tr>
+    <tr><td><code>limit</code></td><td>default 500, max 1000</td></tr>
+  </table>
+  <pre>curl -H "X-API-Key: KEY" "{{ base_url }}/api/v1/punches?since=2026-10-16%2010:00:00"</pre>
+  <pre>{"ok": true, "count": 2, "next_since": "2026-10-16 10:44:12", "punches": [
+  {"id": "6a1...", "emp_code": "102", "name": "amit", "time": "2026-10-16 10:38:40", "kind": "IN", "source": "camera"},
+  {"id": "6a2...", "emp_code": "106", "name": "sahil", "time": "2026-10-16 10:44:12", "kind": "IN", "source": "field",
+   "lat": 22.71957, "lng": 75.85773, "accuracy_m": 12, "face_verified": true}]}</pre>
+  <p class="small muted">Sync loop: call with <code>since</code> = the <code>next_since</code> you got last time.</p>
+</div>
+
+<div class="card">
+  <h2><span class="ep post">POST</span>/punches</h2>
+  <p>A machine or system sends punches (needs the <code>punch</code> permission). One punch, or up to {{ max_batch }} in <code>"punches"</code>.</p>
+  <table class="table">
+    <tr><th>Field</th><th></th></tr>
+    <tr><td><code>emp_code</code></td><td>required - Employee ID</td></tr>
+    <tr><td><code>time</code></td><td>optional - punch time (default: now). Up to {{ past_days }} days back is accepted.</td></tr>
+    <tr><td><code>device</code></td><td>optional - machine name, e.g. "gate-1" (default: the key's name)</td></tr>
+    <tr><td><code>kind</code></td><td>optional - IN or OUT. Leave it out and the first punch of the day is IN, later punches are OUT.</td></tr>
+  </table>
+  <pre>curl -X POST -H "X-API-Key: KEY" -H "Content-Type: application/json" \
+     -d '{"emp_code": "102", "time": "2026-10-16 10:38:00", "device": "gate-1"}' \
+     "{{ base_url }}/api/v1/punches"</pre>
+  <pre>{"punches": [{"emp_code": "102", "time": "2026-10-16 10:38:00"},
+             {"emp_code": "104", "time": "2026-10-16 10:41:30"}]}</pre>
+  <pre>{"ok": true, "saved": 2, "duplicates": 0, "failed": 0, "results": [
+  {"index": 0, "ok": true, "emp_code": "102", "time": "2026-10-16 10:38:00", "kind": "IN", "result": "saved"}, ...]}</pre>
+  <p class="small muted">Sending the same punch again is safe - it comes back as <code>"duplicate"</code> and is not counted twice. Old punches that arrive late are put in the right place (earliest punch of the day = IN, latest = OUT). The same late / half-day rules as the camera apply.</p>
+</div>
+
+<div class="card">
+  <h2><span class="ep get">GET</span>/leaves</h2>
+  <p>Leave requests overlapping <code>from</code>..<code>to</code>. <code>?status=approved</code> (or pending, rejected, cancelled).</p>
+  <pre>curl -H "X-API-Key: KEY" "{{ base_url }}/api/v1/leaves?from=2026-10-01&amp;to=2026-10-31&amp;status=approved"</pre>
+  <pre>{"ok": true, "count": 1, "leaves": [{"id": "6a3...", "emp_code": "102", "name": "amit", "type": "Sick Leave",
+  "from": "2026-10-14", "to": "2026-10-14", "half_day": false, "days": 1.0, "status": "approved",
+  "reason": "fever", "applied_at": "2026-10-13 20:10:00", "decided_at": "2026-10-14 09:00:00"}]}</pre>
+</div>
+
+<div class="card">
+  <h2><span class="ep get">GET</span>/health</h2>
+  <p>Is the system up? Returns database and camera status.</p>
+  <pre>{"ok": true, "time": "2026-10-16 12:00:00", "database": "ok", "camera": {"connected": true, "fps": 20}}</pre>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,10 @@
+* text=auto
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+deploy/Caddyfile text eol=lf
+*.onnx binary
+*.jpg binary
+*.png binary

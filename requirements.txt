@@ -1,0 +1,7 @@
+flask>=3.0
+waitress>=3.0
+numpy>=1.26
+opencv-python-headless>=4.9
+onnxruntime>=1.17
+openpyxl>=3.1
+pymongo>=4.6

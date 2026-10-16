@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}My Attendance{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="who">
+    <img class="avatar" style="width:52px;height:52px" src="{{ url_for('employee_photo', emp_id=emp.id) }}" alt="">
+    <div><h1>Hi, {{ emp.name }}</h1>
+      <p class="muted">{{ emp.emp_code }}{% if emp.department %} · {{ emp.department }}{% endif %}</p></div>
+  </div>
+  <div class="chips">
+    <span class="chip">Office <b>{{ office.start }}</b> · late after <b>{{ office.late_after }}</b></span>
+    <span class="chip">Half day after <b>{{ office.half_after }}</b></span>
+    {% if weekly_off %}<span class="chip">Weekly off <b>{{ weekly_off }}</b></span>{% endif %}
+  </div>
+</div>
+
+<nav class="subnav">
+  <a href="#today">Today</a>{% if field_allowed %}<a href="#field">Field</a>{% endif %}
+  <a href="#calendar">Calendar</a><a href="#leave">Leave</a><a href="#correction">Correction</a>
+  <a href="#history">History</a><a href="#profile">Profile</a>
+</nav>
+
+<div class="tiles" id="today">
+  <div class="tile"><div class="k">Today</div><div style="margin-top:8px"><span class="badge {{ today.status|sc }}" id="tStatus">{{ today.status }}{% if today.late_min %} +{{ today.late_min }}m{% endif %}</span></div></div>
+  <div class="tile ok"><div class="k">IN</div><div class="v" id="tIn">{{ today['in'] or '-' }}</div></div>
+  <div class="tile"><div class="k">Last OUT</div><div class="v" id="tOut">{{ today['out'] or '-' }}</div></div>
+  <div class="tile"><div class="k">Hours today</div><div class="v" id="tHours">{{ today['hours'] if today['hours'] != '' else '-' }}</div></div>
+</div>
+
+{% if field_allowed %}
+<div class="card" id="field">
+  <div class="card-head"><h3>Field attendance (outside the office)</h3></div>
+  <p class="small muted" style="margin-top:0">Take a selfie and share your live location, then press IN when you start work and OUT when you finish. In the office, the CCTV camera marks you automatically.</p>
+  <div class="grid-eq">
+    <div>
+      <label class="f">1 · Selfie</label>
+      <div style="position:relative;max-width:360px">
+        <video id="cam" playsinline autoplay muted style="width:100%;border-radius:10px;background:var(--line);display:none"></video>
+        <img id="shot" alt="Your selfie" style="width:100%;border-radius:10px;display:none">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn ghost" type="button" id="openCam">Open camera</button>
+        <button class="btn" type="button" id="snap" style="display:none">Take photo</button>
+        <label class="btn ghost" id="fileBtn" style="display:none">Take photo<input type="file" id="file" accept="image/*" capture="user" hidden></label>
+      </div>
+    </div>
+    <div>
+      <label class="f">2 · Live location</label>
+      <p id="loc" class="small" style="margin:4px 0 10px">Getting your location…</p>
+      <label class="f" for="note">3 · Site / client / work (optional)</label>
+      <input id="note" maxlength="120" placeholder="e.g. ABC Industries - PLC commissioning">
+      <div class="row" style="margin-top:12px">
+        <button class="btn ok" type="button" id="markIn" disabled>Mark IN</button>
+        <button class="btn" type="button" id="markOut" disabled>Mark OUT</button>
+      </div>
+      <p id="fieldMsg" style="font-weight:600;min-height:22px"></p>
+    </div>
+  </div>
+  <canvas id="canvas" hidden></canvas>
+</div>
+{% endif %}
+
+<div class="card" id="calendar">
+  <div class="card-head">
+    <h3>{{ month.strftime('%B %Y') }}</h3>
+    <div class="row">
+      <a class="btn ghost sm" href="{{ url_for('my', month=prev_month) }}#calendar">‹ Prev</a>
+      <a class="btn ghost sm" href="{{ url_for('my') }}#calendar">This month</a>
+      <a class="btn ghost sm" href="{{ url_for('my', month=next_month) }}#calendar">Next ›</a>
+    </div>
+  </div>
+  <div class="table-wrap">
+  <table class="cal">
+    <thead><tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr></thead>
+    <tbody>
+    {% for week in weeks %}<tr>
+      {% for c in week %}
+        {% if c %}<td class="s-{{ c.status|lower|replace(' ', '-') }}{{ ' today' if c.today }}{{ ' future' if c.future and not c.status }}" title="{{ c.date }} {{ c.status }}">
+          <div class="d">{{ c.day }}</div><div class="t">{{ c.time or (c.status if c.status not in ('Not In Yet',) else '') }}</div></td>
+        {% else %}<td class="blank"></td>{% endif %}
+      {% endfor %}
+    </tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="legend small">
+    <span class="badge b-on-time">On Time</span><span class="badge b-late">Late</span><span class="badge b-half-day">Half Day</span>
+    <span class="badge b-leave">Leave</span><span class="badge b-leave-pending">Leave pending</span><span class="badge b-absent">Absent</span>
+    <span class="badge b-holiday">Holiday</span><span class="badge b-weekly-off">Weekly Off</span>
+  </div>
+  {% if ms %}
+  <div class="tiles" style="margin:14px 0 0">
+    <div class="tile ok"><div class="k">Present</div><div class="v">{{ ms.present }}</div></div>
+    <div class="tile warn"><div class="k">Late</div><div class="v">{{ ms.late }}</div></div>
+    <div class="tile half"><div class="k">Half Day</div><div class="v">{{ ms.half_day }}</div></div>
+    <div class="tile"><div class="k">Leave</div><div class="v">{{ '%g'|format(ms.leave) }}</div></div>
+    <div class="tile bad"><div class="k">Absent</div><div class="v">{{ '%g'|format(ms.absent) }}</div></div>
+    <div class="tile"><div class="k">Hours</div><div class="v">{{ ms.hours }}</div></div>
+    <div class="tile"><div class="k">Avg IN</div><div class="v">{{ avg_in or '-' }}</div></div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card" id="leave">
+  <h3 style="margin-bottom:12px">Leave</h3>
+  <div class="balance">
+    {% for b in balance %}
+    <div><span class="small muted">{{ b.type }}</span>
+      {% if b.quota %}<b>{{ '%g'|format(b.left) }} <span class="small muted" style="font-weight:400">of {{ '%g'|format(b.quota) }} left</span></b>
+      {% else %}<b>{{ '%g'|format(b.used) }} <span class="small muted" style="font-weight:400">taken</span></b>{% endif %}
+      {% if b.pending %}<span class="small" style="color:var(--warn)">{{ '%g'|format(b.pending) }} pending</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <form method="post" action="{{ url_for('my_leave_apply') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f" for="lvType">Leave type</label>
+      <select name="type" id="lvType">{% for t, q in leave_types %}<option>{{ t }}</option>{% endfor %}</select></div>
+    <div><label class="f" for="lvFrom">From</label><input type="date" name="from" id="lvFrom" required></div>
+    <div><label class="f" for="lvTo">To</label><input type="date" name="to" id="lvTo"></div>
+    <div class="checks"><label><input type="checkbox" name="half_day" value="1" id="lvHalf"> Half day</label></div>
+    <div style="grid-column:1/-1"><label class="f" for="lvReason">Reason</label><input name="reason" id="lvReason" maxlength="300" required placeholder="e.g. family function, fever"></div>
+    <div><button class="btn">Apply for leave</button></div>
+  </form>
+  <div class="table-wrap" style="margin-top:14px"><table class="table">
+    <thead><tr><th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th>Admin note</th><th></th></tr></thead>
+    <tbody>{% for lv in leaves %}<tr>
+      <td>{{ lv.type }}</td>
+      <td class="num">{{ lv['from'] }}{% if lv.to != lv['from'] %} → {{ lv.to }}{% endif %}{% if lv.half_day %} <span class="tag">half</span>{% endif %}</td>
+      <td class="num">{{ '%g'|format(lv.days) }}</td>
+      <td><span class="badge b-{{ lv.status }}">{{ lv.status|capitalize }}</span></td>
+      <td class="small">{{ lv.admin_note or '' }}</td>
+      <td>{% if lv.status == 'pending' %}<form class="inline" method="post" action="{{ url_for('my_leave_cancel', rid=lv['_id']|string) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn ghost sm">Cancel</button></form>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="6" class="empty">No leave requests yet.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card" id="correction">
+  <h3>Attendance correction</h3>
+  <p class="small muted">Camera missed you, or you forgot to mark OUT? Ask the admin to fix that day (last 30 days).</p>
+  <form method="post" action="{{ url_for('my_correction') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f" for="crDate">Date</label><input type="date" name="date" id="crDate" required></div>
+    <div><label class="f" for="crIn">Correct IN time</label><input type="time" name="check_in" id="crIn"></div>
+    <div><label class="f" for="crOut">Correct OUT time</label><input type="time" name="check_out" id="crOut"></div>
+    <div style="grid-column:1/-1"><label class="f" for="crReason">Reason</label><input name="reason" id="crReason" maxlength="300" required placeholder="e.g. came with a cap, camera did not see me"></div>
+    <div><button class="btn">Send request</button></div>
+  </form>
+  <div class="table-wrap" style="margin-top:14px"><table class="table">
+    <thead><tr><th>Date</th><th>IN</th><th>OUT</th><th>Reason</th><th>Status</th><th>Admin note</th></tr></thead>
+    <tbody>{% for c in corrections %}<tr>
+      <td class="num">{{ c.date }}</td><td class="num">{{ c.check_in or '-' }}</td><td class="num">{{ c.check_out or '-' }}</td>
+      <td class="small">{{ c.reason }}</td><td><span class="badge b-{{ c.status }}">{{ c.status|capitalize }}</span></td>
+      <td class="small">{{ c.admin_note or '' }}</td>
+    </tr>{% else %}<tr><td colspan="6" class="empty">No correction requests.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Upcoming holidays</h3>
+  {% if holidays %}<div class="chips" style="margin-top:10px">{% for d, label in holidays %}<span class="chip"><b>{{ label }}</b></span>{% endfor %}</div>
+  {% else %}<p class="small muted">No holidays announced yet.</p>{% endif %}
+</div>
+
+<div class="card" id="history">
+  <div class="card-head"><h3>History</h3>
+    <form method="get" class="row"><input type="date" name="start" value="{{ start }}" style="width:auto"><input type="date" name="end" value="{{ end }}" style="width:auto"><button class="btn sm">Show</button>
+      <a class="btn ghost sm" href="{{ url_for('my_export', start=start, end=end) }}">Download Excel</a></form>
+  </div>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Date</th><th>In</th><th>Last out</th><th>Hours</th><th>Status</th><th>Movements</th></tr></thead>
+    <tbody>{% for r in rows %}<tr><td class="num">{{ r.date }} <span class="small muted">{{ r.weekday }}</span></td><td class="num">{{ r.check_in or '-' }}</td><td class="num">{{ r.check_out or '-' }}</td><td class="num">{{ r.hours }}</td>
+    <td><span class="badge {{ r.status|sc }}">{{ r.status }}{% if r.late_min %} +{{ r.late_min }}m{% endif %}</span>{% if r.leave and r.status != 'Leave' %}<span class="tag">{{ r.leave }}</span>{% elif r.leave %}<span class="small muted"> {{ r.leave }}</span>{% endif %}</td>
+    <td class="small">{% for m in r.moves %}{{ m.kind }} {{ m.time }}{% if m.field %} <a href="https://www.google.com/maps?q={{ m.lat }},{{ m.lng }}" target="_blank" rel="noopener">(field)</a>{% endif %}{{ ', ' if not loop.last }}{% endfor %}</td></tr>
+    {% else %}<tr><td colspan="6" class="empty">No data</td></tr>{% endfor %}</tbody></table></div>
+</div>
+
+<div class="card" id="profile">
+  <h3>Profile</h3>
+  <div class="grid-eq" style="margin-top:10px">
+    <table class="table">
+      <tr><td class="muted">Name</td><td>{{ emp.name }}</td></tr>
+      <tr><td class="muted">Employee ID</td><td>{{ emp.emp_code }}</td></tr>
+      <tr><td class="muted">Department</td><td>{{ emp.department or '-' }}</td></tr>
+      <tr><td class="muted">Field attendance</td><td>{{ 'Allowed' if field_allowed else 'Office only' }}</td></tr>
+    </table>
+    <form method="post" action="{{ url_for('my_password') }}" class="form-grid" style="grid-template-columns:1fr">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <div><label class="f" for="pwCur">Current password</label><input type="password" name="current" id="pwCur" autocomplete="current-password" required></div>
+      <div><label class="f" for="pwNew">New password (min 6)</label><input type="password" name="new" id="pwNew" autocomplete="new-password" minlength="6" required></div>
+      <div><label class="f" for="pwAgain">New password again</label><input type="password" name="again" id="pwAgain" autocomplete="new-password" minlength="6" required></div>
+      <div><button class="btn">Change password</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// half-day leave = one date
+(() => {
+  const half = document.getElementById("lvHalf"), from = document.getElementById("lvFrom"), to = document.getElementById("lvTo");
+  const sync = () => { if (half.checked) { to.value = from.value; to.disabled = true; } else { to.disabled = false; } };
+  half.onchange = sync; from.onchange = () => { if (!to.value || to.value < from.value || half.checked) to.value = from.value; };
+  document.getElementById("crDate").max = new Date().toISOString().slice(0, 10);
+})();
+</script>
+{% if field_allowed %}
+<script>
+(() => {
+  const cam = document.getElementById("cam"), shot = document.getElementById("shot");
+  const openCam = document.getElementById("openCam"), snapBtn = document.getElementById("snap");
+  const fileBtn = document.getElementById("fileBtn"), fileIn = document.getElementById("file");
+  const locText = document.getElementById("loc"), msg = document.getElementById("fieldMsg");
+  const markIn = document.getElementById("markIn"), markOut = document.getElementById("markOut");
+  let photo = null, pos = null, stream = null;
+  const live = window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+
+  function ready() {
+    const ok = photo && pos;
+    markIn.disabled = !ok; markOut.disabled = !ok;
+  }
+  function setStatus(t) {
+    document.getElementById("tIn").textContent = t.in || "-";
+    document.getElementById("tOut").textContent = t.out || "-";
+    document.getElementById("tHours").textContent = t.hours === "" ? "-" : t.hours;
+    const st = document.getElementById("tStatus");
+    st.textContent = t.status + (t.late_min ? " +" + t.late_min + "m" : "");
+    st.className = "badge " + sc(t.status);
+  }
+  // shrink to max 720 px so uploads are quick on mobile data
+  function toBlob(source, w, h) {
+    const c = document.getElementById("canvas"), s = Math.min(1, 720 / Math.max(w, h));
+    c.width = Math.round(w * s); c.height = Math.round(h * s);
+    c.getContext("2d").drawImage(source, 0, 0, c.width, c.height);
+    return new Promise(res => c.toBlob(res, "image/jpeg", 0.85));
+  }
+  async function usePhoto(blob) {
+    photo = blob;
+    shot.src = URL.createObjectURL(blob); shot.style.display = "block"; cam.style.display = "none";
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    snapBtn.style.display = "none";
+    openCam.textContent = "Retake"; openCam.style.display = live ? "" : "none";
+    ready();
+  }
+
+  if (live) {
+    openCam.onclick = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user"}, audio: false});
+        cam.srcObject = stream; cam.style.display = "block"; shot.style.display = "none";
+        snapBtn.style.display = ""; openCam.style.display = "none"; photo = null; ready();
+      } catch (e) {
+        msg.textContent = "Camera blocked - allow camera access, or use Take photo.";
+        openCam.style.display = "none"; fileBtn.style.display = "";
+      }
+    };
+    snapBtn.onclick = async () => usePhoto(await toBlob(cam, cam.videoWidth, cam.videoHeight));
+  } else {
+    openCam.style.display = "none"; fileBtn.style.display = "";
+  }
+  fileIn.onchange = () => {
+    const f = fileIn.files[0]; if (!f) return;
+    const img = new Image();
+    img.onload = async () => usePhoto(await toBlob(img, img.naturalWidth, img.naturalHeight));
+    img.src = URL.createObjectURL(f);
+  };
+
+  if (!window.isSecureContext || !navigator.geolocation) {
+    locText.textContent = "Location works only on the secure (https://) link of this website. Ask the admin for it.";
+  } else {
+    navigator.geolocation.watchPosition(p => {
+      pos = p.coords;
+      locText.innerHTML = `${pos.latitude.toFixed(5)}, ${pos.longitude.toFixed(5)} <span class="muted">(±${Math.round(pos.accuracy)} m)</span>
+        · <a href="https://www.google.com/maps?q=${pos.latitude},${pos.longitude}" target="_blank" rel="noopener">see on map</a>`;
+      ready();
+    }, e => {
+      locText.textContent = e.code === 1 ? "Location permission denied - allow location for this site and reload."
+                                         : "Could not get your location - turn on GPS and wait a moment.";
+    }, {enableHighAccuracy: true, timeout: 20000, maximumAge: 10000});
+  }
+
+  async function mark(kind) {
+    markIn.disabled = markOut.disabled = true;
+    msg.style.color = ""; msg.textContent = "Saving…";
+    const fd = new FormData();
+    fd.append("kind", kind); fd.append("photo", photo, "selfie.jpg");
+    fd.append("lat", pos.latitude); fd.append("lng", pos.longitude); fd.append("accuracy", pos.accuracy);
+    fd.append("note", document.getElementById("note").value);
+    try {
+      const r = await (await fetch("/api/field/mark", {method: "POST", headers: {"X-CSRF-Token": CSRF}, body: fd})).json();
+      msg.style.color = r.ok ? (r.verified ? "var(--ok)" : "var(--warn)") : "var(--bad)";
+      msg.textContent = r.msg;
+      if (r.ok) { setStatus(r.today); photo = null; shot.style.display = "none"; openCam.textContent = "Open camera"; openCam.style.display = live ? "" : "none"; }
+    } catch (e) {
+      msg.style.color = "var(--bad)"; msg.textContent = "No internet - try again.";
+    }
+    ready();
+  }
+  markIn.onclick = () => mark("IN");
+  markOut.onclick = () => mark("OUT");
+})();
+</script>
+{% endif %}
+{% endblock %}

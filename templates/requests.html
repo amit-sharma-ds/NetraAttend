@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Requests{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Requests</h1><p class="muted">Leave and attendance-correction requests from employees.</p></div></div>
+
+<div class="card">
+  <h2>Leave - waiting for you ({{ leaves_p|length }})</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Balance</th><th>Reason</th><th>Decision</th></tr></thead>
+    <tbody>{% for r in leaves_p %}
+      {% set b = balances.get(r.emp_id, {}).get(r.type) %}
+      <tr>
+        <td><b>{{ r.name }}</b> <span class="small muted">{{ r.code }}</span><div class="small muted">applied {{ r.applied_at[5:16] }}</div></td>
+        <td>{{ r.type }}</td>
+        <td class="num">{{ r['from'] }}{% if r.to != r['from'] %} → {{ r.to }}{% endif %}{% if r.half_day %} <span class="tag">half</span>{% endif %}</td>
+        <td class="num">{{ '%g'|format(r.days) }}</td>
+        <td class="small">{% if b and b.quota %}{{ '%g'|format(b.left) }} of {{ '%g'|format(b.quota) }} left{% else %}no limit{% endif %}</td>
+        <td class="small">{{ r.reason }}</td>
+        <td>
+          <form method="post" class="row" style="gap:6px">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input name="note" placeholder="Note (optional)" style="width:150px">
+            <button class="btn ok sm" formaction="{{ url_for('decide_request', kind='leave', rid=r.id, action='approve') }}">Approve</button>
+            <button class="btn danger sm" formaction="{{ url_for('decide_request', kind='leave', rid=r.id, action='reject') }}">Reject</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}<tr><td colspan="7" class="empty">No pending leave requests.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Attendance corrections - waiting for you ({{ corr_p|length }})</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>Date</th><th>Correct IN</th><th>Correct OUT</th><th>Reason</th><th>Decision</th></tr></thead>
+    <tbody>{% for r in corr_p %}<tr>
+      <td><b>{{ r.name }}</b> <span class="small muted">{{ r.code }}</span><div class="small muted">applied {{ r.applied_at[5:16] }}</div></td>
+      <td class="num">{{ r.date }}</td><td class="num">{{ r.check_in or 'keep' }}</td><td class="num">{{ r.check_out or 'keep' }}</td>
+      <td class="small">{{ r.reason }}</td>
+      <td>
+        <form method="post" class="row" style="gap:6px">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input name="note" placeholder="Note (optional)" style="width:150px">
+          <button class="btn ok sm" formaction="{{ url_for('decide_request', kind='correction', rid=r.id, action='approve') }}">Approve</button>
+          <button class="btn danger sm" formaction="{{ url_for('decide_request', kind='correction', rid=r.id, action='reject') }}">Reject</button>
+        </form>
+      </td>
+    </tr>{% else %}<tr><td colspan="6" class="empty">No pending corrections.</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small muted">Approving a correction writes those times for that day (marked "manual" in reports). "keep" = the time already recorded stays.</p>
+</div>
+
+<div class="card">
+  <h2>Recently decided</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>Request</th><th>Status</th><th>Note</th><th>Decided</th></tr></thead>
+    <tbody>
+    {% for r in leaves_d %}<tr><td>{{ r.name }}</td><td>{{ r.type }} · {{ r['from'] }}{% if r.to != r['from'] %} → {{ r.to }}{% endif %} ({{ '%g'|format(r.days) }}d)</td>
+      <td><span class="badge b-{{ r.status }}">{{ r.status|capitalize }}</span></td><td class="small">{{ r.admin_note }}</td><td class="small muted">{{ (r.decided_at or '')[5:16] }}</td></tr>{% endfor %}
+    {% for r in corr_d %}<tr><td>{{ r.name }}</td><td>Correction · {{ r.date }} IN {{ r.check_in or 'keep' }} / OUT {{ r.check_out or 'keep' }}</td>
+      <td><span class="badge b-{{ r.status }}">{{ r.status|capitalize }}</span></td><td class="small">{{ r.admin_note }}</td><td class="small muted">{{ (r.decided_at or '')[5:16] }}</td></tr>{% endfor %}
+    {% if not leaves_d and not corr_d %}<tr><td colspan="5" class="empty">Nothing yet.</td></tr>{% endif %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

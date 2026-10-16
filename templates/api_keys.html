@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}API{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>API</h1><p class="muted">Keys for other systems - punching machines, payroll, HR software. <a href="{{ url_for('api_docs') }}">Read the API documentation</a></p></div>
+</div>
+
+{% if new_key %}
+<div class="card" style="border-color:var(--ok)">
+  <h3>New key created - copy it now</h3>
+  <p class="small muted">It is shown only this once. Give it to the system that will use the API; if it is lost, revoke it and create a new one.</p>
+  <div class="row"><code id="newKey" style="font-size:15px;padding:8px 10px;overflow-wrap:anywhere">{{ new_key }}</code>
+    <button class="btn sm" type="button" id="copyKey">Copy</button><span id="copied" class="small" style="color:var(--ok)"></span></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Create a key</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f" for="keyName">Name (who uses it)</label><input name="name" id="keyName" placeholder="e.g. eSSL gate machine" required></div>
+    <div class="checks" style="grid-column:span 2">
+      <label><input type="checkbox" name="scopes" value="read" checked> Read (employees, attendance, punches, leaves)</label>
+      <label><input type="checkbox" name="scopes" value="punch"> Send punches (machines)</label>
+    </div>
+    <div><button class="btn">Create key</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Keys</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Name</th><th>Key</th><th>Permissions</th><th>Created</th><th>Last used</th><th>Calls</th><th></th></tr></thead>
+    <tbody>{% for k in keys %}<tr {% if not k.active %}style="opacity:.55"{% endif %}>
+      <td><b>{{ k.name }}</b></td>
+      <td><code>{{ k.prefix }}…</code></td>
+      <td>{% for s in k.scopes %}<span class="badge {{ 'b-out' if s == 'punch' else 'b-on-time' }}">{{ s }}</span> {% endfor %}</td>
+      <td class="small">{{ k.created_at[:16] }}</td>
+      <td class="small">{{ (k.last_used_at or 'never')[:16] }}</td>
+      <td class="num">{{ k.uses or 0 }}</td>
+      <td>{% if k.active %}<form class="inline" method="post" action="{{ url_for('api_key_revoke', key_id=k.id) }}" data-confirm="Revoke '{{ k.name }}'? Systems using it stop working immediately."><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn danger sm">Revoke</button></form>{% else %}<div class="row" style="gap:6px;flex-wrap:nowrap"><span class="badge b-cancelled">Revoked</span>
+        <form class="inline" method="post" action="{{ url_for('api_key_delete', key_id=k.id) }}" data-confirm="Delete '{{ k.name }}' from the list?"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn ghost sm">Delete</button></form></div>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="7" class="empty">No keys yet.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Quick test</h3>
+  <p class="small muted">From this PC (replace the key):</p>
+  <pre style="white-space:pre-wrap;overflow-wrap:anywhere;background:var(--idle-bg);padding:10px;border-radius:8px;margin:0">curl -H "X-API-Key: YOUR_KEY" "{{ base_url }}/api/v1/attendance?from=2026-10-01&amp;to=2026-10-31"</pre>
+</div>
+{% endblock %}
+{% block scripts %}
+{% if new_key %}
+<script>
+document.getElementById("copyKey").onclick = async () => {
+  const box = document.getElementById("newKey"), msg = document.getElementById("copied");
+  try { await navigator.clipboard.writeText(box.textContent); msg.textContent = "Copied"; }
+  catch (e) { const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); msg.textContent = "Selected - press Ctrl+C"; }
+};
+</script>
+{% endif %}
+{% endblock %}

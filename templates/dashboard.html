@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Today</h1><p class="muted" id="dateLabel"></p></div>
+  <div class="chips"><span class="chip" id="officeChip"></span><span class="chip" id="camChip"></span></div>
+</div>
+<div class="tiles">
+  <div class="tile"><div class="k">Employees</div><div class="v" id="cTotal">-</div></div>
+  <div class="tile ok"><div class="k">Present</div><div class="v" id="cPresent">-</div></div>
+  <div class="tile ok"><div class="k">On Time</div><div class="v" id="cOnTime">-</div></div>
+  <div class="tile warn"><div class="k">Late</div><div class="v" id="cLate">-</div></div>
+  <div class="tile bad"><div class="k">Not In</div><div class="v" id="cNotIn">-</div></div>
+</div>
+<div class="grid-2 mb">
+  <div class="card"><div class="card-head"><h3>Live camera</h3><a href="{{ url_for('live') }}">Full screen</a></div>
+    <img class="live-img" src="{{ url_for('video_feed') }}" alt="Live camera"></div>
+  <div class="card"><div class="card-head"><h3>Recent activity</h3></div><ul class="feed" id="feed"></ul></div>
+</div>
+<div class="card">
+  <div class="card-head"><h3>Today's attendance</h3><button class="btn ghost sm" onclick="document.getElementById('manual').showModal()">+ Manual entry</button></div>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>In</th><th>Last out</th><th>Hours</th><th>Status</th><th>Movements (click for photo)</th></tr></thead>
+    <tbody id="rows"></tbody></table></div>
+</div>
+<dialog id="manual">
+  <form method="post" action="{{ url_for('manual_attendance') }}">
+    <h2>Manual entry</h2>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <div class="full"><label class="f">Employee</label><select name="emp_id">{% for e in emps %}<option value="{{ e.id }}">{{ e.name }} ({{ e.emp_code }})</option>{% endfor %}</select></div>
+      <div class="full"><label class="f">Date</label><input type="date" name="date" value="{{ today }}"></div>
+      <div><label class="f">Check in</label><input type="time" name="check_in"></div>
+      <div><label class="f">Check out</label><input type="time" name="check_out"></div>
+      <div class="full"><label class="f">Note</label><input name="note" placeholder="e.g. camera was off"></div>
+      <p class="full small muted">Leave check-in empty to delete that day's record.</p>
+    </div>
+    <div class="row"><button class="btn">Save</button><button class="btn ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}
+<script>
+function moves(list){
+  return (list || []).map(m => `<span class="badge b-${m.kind.toLowerCase()}" style="cursor:${m.photo ? "zoom-in" : "default"};margin:1px"
+    ${m.photo ? `onclick="zoom('/snap/${m.photo}')"` : ""}>${m.kind} ${m.time}${m.field ? " · field" : ""}</span>`).join(" ") || "-";
+}
+async function refresh(){
+  let d; try { d = await (await fetch("/api/today")).json(); } catch(e) { return; }
+  document.getElementById("dateLabel").textContent = d.date_label + (d.day_off ? " · " + d.day_off : "");
+  document.getElementById("officeChip").innerHTML = `Office <b>${d.office_start}</b> · grace ${d.grace} min · late after <b>${d.late_after}</b>`;
+  const cam = d.engine.camera;
+  document.getElementById("camChip").innerHTML = `<span class="dot ${cam.connected ? "on" : "off"}"></span>Camera ${cam.connected ? "online · " + cam.fps + " fps" : "offline"}`;
+  const c = d.counts;
+  cTotal.textContent = c.total; cPresent.textContent = c.present; cOnTime.textContent = c.on_time;
+  cLate.textContent = c.late; cNotIn.textContent = c.not_in;
+  rows.innerHTML = d.rows.map(r => `<tr>
+    <td><div class="who"><img class="avatar" src="/photo/${r.emp_id}" alt=""><div><b>${esc(r.name)}</b><span class="small muted">${esc(r.code)}</span></div></div></td>
+    <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
+    <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}</td>
+    <td>${moves(r.moves)}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="empty">No employees yet - add them on the Employees page.</td></tr>';
+  feed.innerHTML = d.events.map(e => `<li>${e.photo ? `<img class="thumb" src="/snap/${e.photo}" onclick="zoom(this.src)" alt="">` : ""}
+    <div class="meta"><b>${esc(e.name)}</b><span class="badge b-${e.kind.toLowerCase()}">${e.kind === "IN" ? "Check-in" : "Out"}</span></div><time>${e.time}</time></li>`).join("")
+    || '<li class="muted">No activity yet today.</li>';
+}
+refresh(); setInterval(refresh, 4000);
+</script>
+{% endblock %}

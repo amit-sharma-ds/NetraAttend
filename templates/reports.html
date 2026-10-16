@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="card">
+  <form method="get" class="form-grid">
+    <div><label class="f">From</label><input type="date" name="start" value="{{ start }}"></div>
+    <div><label class="f">To</label><input type="date" name="end" value="{{ end }}"></div>
+    <div><label class="f">Employee</label><select name="emp"><option value="">All employees</option>{% for e in emps %}<option value="{{ e.id }}" {{ 'selected' if emp_id == e.id }}>{{ e.name }} ({{ e.emp_code }})</option>{% endfor %}</select></div>
+    <div class="row"><button class="btn">Show</button>
+      <a class="btn ghost" href="{{ url_for('reports_excel', start=start, end=end, emp=emp_id or '') }}">Download Excel</a></div>
+  </form>
+</div>
+<div class="card">
+  <h2>Summary</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>Present</th><th>On Time</th><th>Late</th><th>Half Day</th><th>Leave</th><th>Absent</th><th title="Total time late on Late days">Late by (total)</th><th title="First IN to last OUT, days with an OUT time">Worked</th></tr></thead>
+    <tbody>{% for s in summary %}<tr><td><b>{{ s.name }}</b> <span class="small muted">{{ s.code }}</span></td><td class="num">{{ s.present }}</td><td class="num">{{ s.on_time }}</td><td class="num">{{ s.late }}</td><td class="num">{{ s.half_day }}</td><td class="num">{{ '%g'|format(s.leave) }}</td><td class="num">{{ '%g'|format(s.absent) }}</td><td class="num">{{ s.late_min|hm }}</td><td class="num">{{ s.hours|hhm }}</td></tr>
+    {% else %}<tr><td colspan="9" class="empty">No data</td></tr>{% endfor %}</tbody></table></div>
+  <p class="small muted" style="margin-bottom:0">Late by = total time after office start on Late days (e.g. 1h 05m). Worked = first IN to last OUT; a day without an OUT time is not counted.</p>
+</div>
+<div class="card">
+  <h2>Day-wise</h2>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Date</th><th>Employee</th><th>In</th><th>Last out</th><th>Hours</th><th>Status</th><th>Movements (click for photo)</th></tr></thead>
+    <tbody>{% for r in rows %}<tr>
+      <td class="num">{{ r.date }} <span class="small muted">{{ r.weekday }}</span></td>
+      <td>{{ r.name }} <span class="small muted">{{ r.code }}</span></td>
+      <td class="num">{{ r.check_in or '-' }}</td><td class="num">{{ r.check_out or '-' }}</td><td class="num">{{ r.hours|hhm }}</td>
+      <td><span class="badge {{ r.status|sc }}">{{ r.status }}{% if r.late_min %} +{{ r.late_min|hm }}{% endif %}</span>{% if r.leave %}<span class="tag">{{ r.leave }}</span>{% endif %}{% if r.source == 'manual' %}<span class="tag" title="{{ r.note }}">manual</span>{% endif %}</td>
+      <td>{% for m in r.moves %}<span class="badge b-{{ m.kind|lower }}" style="margin:1px;{{ 'cursor:zoom-in' if m.photo }}" {% if m.photo %}onclick="zoom('{{ url_for('snapshot', rel=m.photo) }}')"{% endif %}>{{ m.kind }} {{ m.time }}</span>{% if m.field %}<a class="small" href="https://www.google.com/maps?q={{ m.lat }},{{ m.lng }}" target="_blank" rel="noopener" title="Marked from outside - open location">field{{ '' if m.verified else ' ⚠' }}</a>{% endif %} {% else %}{% if r.in_photo %}<img class="thumb" src="{{ url_for('snapshot', rel=r.in_photo) }}" onclick="zoom(this.src)" alt="">{% endif %}{% endfor %}</td>
+    </tr>{% else %}<tr><td colspan="7" class="empty">No data</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endblock %}

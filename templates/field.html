@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Field work{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Field attendance</h1>
+    <p class="muted">IN / OUT marked by employees from outside the office with a selfie and live location.</p></div>
+  <form method="get" class="row">
+    <input type="date" name="date" value="{{ day }}" style="width:auto">
+    <button class="btn">Show</button>
+  </form>
+</div>
+{% if days %}<div class="chips mb">{% for d in days %}<a class="chip" href="{{ url_for('field_page', date=d) }}" {% if d == day %}style="border-color:var(--brand);color:var(--brand)"{% endif %}>{{ d }}</a>{% endfor %}</div>{% endif %}
+<div class="card">
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Employee</th><th>Time</th><th>Selfie</th><th>Face</th><th>Location</th><th>Site / note</th></tr></thead>
+    <tbody>
+    {% for e in items %}
+      <tr>
+        <td><b>{{ e.name }}</b> <span class="small muted">{{ e.code }}</span></td>
+        <td class="num"><span class="badge b-{{ e.kind|lower }}">{{ e.kind }}</span> {{ e.ts[11:16] }}</td>
+        <td>{% if e.photo %}<img class="thumb" src="{{ url_for('snapshot', rel=e.photo) }}" onclick="zoom(this.src)" alt="Selfie">{% endif %}</td>
+        <td>{% if e.verified %}<span class="badge b-on-time">Verified</span>{% else %}<span class="badge b-absent">Not verified</span>{% endif %}
+            <div class="small muted">match {{ '%.2f'|format(e.score or 0) }}</div></td>
+        <td class="num"><a href="https://www.google.com/maps?q={{ e.lat }},{{ e.lng }}" target="_blank" rel="noopener">{{ '%.5f'|format(e.lat) }}, {{ '%.5f'|format(e.lng) }}</a>
+            <div class="small {{ 'warn' if e.accuracy and e.accuracy > 200 else 'muted' }}" {% if e.accuracy and e.accuracy > 200 %}style="color:var(--warn)"{% endif %}>±{{ e.accuracy }} m</div></td>
+        <td>{{ e.note or '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No field attendance on {{ day }}.</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+</div>
+<p class="small muted">"Not verified" = the selfie did not match the face registered for that employee (or the photo was poor). Check the selfie; if it is wrong, correct the day with <b>Manual entry</b> on the dashboard. Accuracy above ±200 m usually means GPS was off.
+Which employees may use field attendance is set on the <a href="{{ url_for('employees') }}">Employees</a> page (Edit → Field work allowed).</p>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="card" id="camera">
+  <h2>Camera</h2>
+  <p class="small muted" style="margin-top:0">If the camera's IP changes, type the new IP and press <b>Save &amp; connect</b>. The app switches to it straight away - no restart needed.</p>
+  <form method="post" action="{{ url_for('camera_settings') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f">Camera IP</label><input name="camera_ip" value="{{ camera_ip }}" placeholder="192.168.1.181"></div>
+    <div style="grid-column:span 2"><label class="f">Full RTSP link (advanced - *** = saved password)</label><input name="camera_link" value="{{ camera }}"></div>
+    <div><button class="btn">Save &amp; connect</button></div>
+  </form>
+  <p class="small" style="margin-bottom:0">Status: <span id="camStatus"><span class="dot {{ 'on' if stats.camera.connected else 'off' }}"></span>{{ 'Connected' if stats.camera.connected else 'Not connected' }} {{ stats.camera.size }}</span></p>
+</div>
+<div class="card">
+  <h2>Office timing</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f">Company name</label><input name="company_name" value="{{ s.company_name }}"></div>
+    <div><label class="f">Office start (HH:MM)</label><input name="office_start" value="{{ s.office_start }}" placeholder="10:30"></div>
+    <div><label class="f">Grace minutes (late after start + grace)</label><input name="grace_min" type="number" min="0" max="240" value="{{ s.grace_min }}"></div>
+    <div><label class="f">Half day if check-in after (HH:MM)</label><input name="half_day_after" value="{{ s.half_day_after }}"></div>
+    <div><label class="f">Half day if worked less than (hours)</label><input name="half_day_hours" value="{{ s.half_day_hours }}"></div>
+    <div><label class="f">Ignore re-sightings for (min) after check-in</label><input name="min_out_gap_min" type="number" min="0" value="{{ s.min_out_gap_min }}"></div>
+    <div class="full" style="grid-column:1/-1"><label class="f">Weekly off</label>
+      <div class="checks">{% for d in weekdays %}<label><input type="checkbox" name="weekly_off" value="{{ loop.index0 }}" {{ 'checked' if loop.index0 in off }}>{{ d }}</label>{% endfor %}</div></div>
+    <div style="grid-column:1/-1"><label class="f">Holidays (YYYY-MM-DD, comma separated)</label><textarea name="holidays" rows="2">{{ s.holidays }}</textarea></div>
+    <div style="grid-column:1/-1"><label class="f">Leave types - name:days per year, comma separated (0 = no limit)</label><input name="leave_types" value="{{ s.leave_types }}" placeholder="Casual Leave:12, Sick Leave:6, Unpaid Leave:0"></div>
+    <div><button class="btn">Save settings</button></div>
+  </form>
+</div>
+<div class="card">
+  <h2>System</h2>
+  <table class="table">
+    <tr><td>Database</td><td>MongoDB · {{ db_name }}</td></tr>
+    <tr><td>Models</td><td>{{ stats.models }}</td></tr>
+    <tr><td>Speed</td><td>detection {{ stats.det_ms }} ms · recognition {{ stats.rec_ms }} ms/face · AI {{ stats.det_fps }} fps</td></tr>
+    <tr><td>Registered faces</td><td>{{ stats.employees }} employees</td></tr>
+  </table>
+  <p class="small muted">Models and thresholds are changed in <code>config.py</code> (restart needed).</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// live camera status, so a new IP can be checked right after saving
+async function camStatus(){
+  try {
+    const c = (await (await fetch("/api/status")).json()).camera;
+    document.getElementById("camStatus").innerHTML =
+      `<span class="dot ${c.connected ? "on" : "off"}"></span>${c.connected ? "Connected " + c.size + " · " + c.fps + " fps" : "Not connected - check the IP / camera"}`;
+  } catch (e) {}
+}
+camStatus(); setInterval(camStatus, 3000);
+</script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Face photos{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="who">
+    <img class="avatar" style="width:56px;height:56px" src="{{ url_for('employee_photo', emp_id=emp.id) }}" alt="">
+    <div><h1>{{ emp.name }}</h1><p class="muted">{{ emp.emp_code }} · {{ total }} saved face photos</p></div>
+  </div>
+  <div class="row">
+    <a class="btn" href="{{ url_for('enroll_page', emp_id=emp.id) }}">Re-register face</a>
+    <a class="btn ghost" href="{{ url_for('employees') }}">Back to employees</a>
+  </div>
+</div>
+<p class="small muted">These small face photos (one per pose) are what the camera uses to recognise {{ emp.name }}. They are stored in MongoDB (<code>face_samples</code>). "auto" photos were learned by the app itself when it recognised the person with high confidence. If a photo shows someone else or no face, re-register this employee.</p>
+{% for pose, items in groups %}
+<div class="card">
+  <h3 style="margin-bottom:10px">{{ pose|capitalize }} <span class="small muted">({{ items|length }})</span></h3>
+  <div class="row" style="align-items:flex-start">
+    {% for s in items %}
+    <figure style="margin:0;display:grid;gap:4px;justify-items:center">
+      <img src="{{ url_for('face_image', sample_id=s.id) }}" alt="{{ pose }} face" width="112" height="112"
+           style="border-radius:10px;background:var(--line);cursor:zoom-in" onclick="zoom(this.src)" loading="lazy">
+      <figcaption class="small muted">{{ s.source }}{% if s.created_at %} · {{ s.created_at[5:16] }}{% endif %}</figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="card"><p class="empty">No face photos saved yet. <a href="{{ url_for('enroll_page', emp_id=emp.id) }}">Register face</a></p></div>
+{% endfor %}
+{% endblock %}

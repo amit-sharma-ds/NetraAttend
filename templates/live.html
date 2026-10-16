@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Live Camera{% endblock %}
+{% block content %}
+<div class="grid-2">
+  <div class="card"><img class="live-img live-big" src="{{ url_for('video_feed') }}" alt="Live camera"></div>
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <h3>Recognised</h3>
+    <ul class="feed" id="recent"></ul>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function refresh(){
+  let s; try { s = await (await fetch("/api/status")).json(); } catch(e) { return; }
+  const c = s.camera;
+  stats.innerHTML = `<div>Camera<b>${c.connected ? "Online" : "Offline"}</b></div><div>Resolution<b>${c.size || "-"}</b></div>
+    <div>Camera FPS<b>${c.fps}</b></div><div>AI FPS<b>${s.det_fps}</b></div>
+    <div>Faces in view<b>${s.faces}</b></div><div>Enrolled<b>${s.employees}</b></div>`;
+  recent.innerHTML = s.recent.map(r => `<li>${r.photo ? `<img class="thumb" src="/snap/${r.photo}" onclick="zoom(this.src)" alt="">` : ""}
+    <div class="meta"><b>${esc(r.name)}</b><span class="badge b-${r.kind.toLowerCase()}">${r.kind}</span> ${r.status ? `<span class="badge ${sc(r.status)}">${r.status}</span>` : ""}</div>
+    <time>${r.time}</time></li>`).join("") || '<li class="muted">Nobody recognised yet.</li>';
+}
+refresh(); setInterval(refresh, 2000);
+</script>
+{% endblock %}

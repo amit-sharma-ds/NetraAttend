@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Register face{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Register face: {{ emp.name }}</h1>
+  <p class="muted">{{ emp.emp_code }} · saved samples: {% if samples %}{% for p, n in samples.items() %}{{ p }} {{ n }}{{ ', ' if not loop.last }}{% endfor %} · <a href="{{ url_for('face_photos', emp_id=emp.id) }}">view face photos</a>{% else %}none{% endif %}</p></div>
+  <a class="btn ghost" href="{{ url_for('employees') }}">Back to employees</a>
+</div>
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h3>Option 1 · Capture from the CCTV camera (best)</h3></div>
+    <img class="live-img" src="{{ url_for('video_feed') }}" alt="Live camera">
+    <p class="small muted">The employee stands alone in front of the CCTV camera (about 1-2 m away) and follows the instructions. Open this page on a phone to guide them.</p>
+  </div>
+  <div class="card">
+    <div class="instruction" id="instr">Press Start when the employee is in front of the camera</div>
+    <div class="warning" id="warn"></div>
+    <div id="hint" style="font-weight:600;color:var(--brand);min-height:21px"></div>
+    <div class="poses" id="poses">
+      {% for p, n, t in poses %}<div class="pose" id="pose-{{ p }}"><span>{{ p|capitalize }}</span><div class="bar"><i style="width:0"></i></div><span class="small">0/{{ n }}</span></div>{% endfor %}
+    </div>
+    <label class="small"><input type="checkbox" id="replace" style="width:auto" {{ 'checked' if not samples }}> Replace existing face data</label>
+    <p class="small muted" style="margin:4px 0 0">Look changed a lot (beard removed, new glasses)? Keep this <b>unticked</b> and scan again - the new look is <b>added</b>, the old one is kept. Small changes are learned automatically.</p>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="startBtn" onclick="start()">Start capture</button>
+      <button class="btn ok" id="saveBtn" onclick="save()" disabled>Save</button>
+      <button class="btn ghost" id="skipBtn" onclick="skip()" style="display:none">Skip this pose</button>
+      <button class="btn ghost" id="cancelBtn" onclick="cancel()" disabled>Cancel</button>
+    </div>
+    <p id="result"></p>
+  </div>
+</div>
+<div class="card" style="margin-top:16px">
+  <h3>Option 2 · Upload photos</h3>
+  <p class="small muted">3-10 clear photos of only this person: front, left side, right side. Phone photos are fine.</p>
+  <form id="upForm" class="row">
+    <input type="file" name="photos" accept="image/*" multiple required style="max-width:340px">
+    <select name="mode" style="width:auto"><option value="add">Add to existing</option><option value="replace" {{ 'selected' if not samples }}>Replace existing</option></select>
+    <button class="btn">Upload</button>
+  </form>
+  <div id="upResult"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const EMP = {{ emp.id }};
+let timer = null;
+function setButtons(active, canSave){ startBtn.disabled = active; cancelBtn.disabled = !active; saveBtn.disabled = !canSave; }
+async function poll(){
+  const s = await (await fetch("/api/enroll/status")).json();
+  if (!s.active || s.emp_id !== EMP) { clearInterval(timer); timer = null; setButtons(false, false); skipBtn.style.display = "none"; return; }
+  const stepNo = s.poses.findIndex(p => p.pose === s.step) + 1;
+  instr.textContent = s.step ? `Step ${stepNo}/${s.poses.length}: ${s.message}` : s.message;
+  warn.textContent = s.warning || "";
+  hint.textContent = s.hint || "";
+  for (const p of s.poses) {
+    const el = document.getElementById("pose-" + p.pose);
+    el.querySelector("i").style.width = (p.skipped ? 0 : Math.min(100, p.have / p.need * 100)) + "%";
+    el.lastElementChild.textContent = p.skipped ? "skipped" : p.have + "/" + p.need;
+    el.classList.toggle("done", p.have >= p.need);
+    el.classList.toggle("cur", p.pose === s.step);
+  }
+  skipBtn.style.display = s.can_skip ? "" : "none";
+  setButtons(true, s.can_save);
+  if (s.complete) save();
+}
+async function start(){
+  result.textContent = "";
+  const r = await postJSON(`/api/enroll/${EMP}/start`, {replace: replace.checked});
+  if (!r.ok) { result.textContent = r.msg; return; }
+  if (!timer) timer = setInterval(poll, 700);
+  poll();
+}
+async function save(){
+  clearInterval(timer); timer = null; setButtons(false, false);
+  instr.textContent = "Saving...";
+  const r = await postJSON(`/api/enroll/${EMP}/save`);
+  instr.textContent = r.ok ? "Done!" : "Not saved";
+  result.innerHTML = `<span class="badge ${r.ok ? "b-on-time" : "b-absent"}">${esc(r.msg)}</span>`;
+}
+async function skip(){ await postJSON("/api/enroll/skip"); poll(); }
+async function cancel(){ await postJSON("/api/enroll/cancel"); clearInterval(timer); timer = null; setButtons(false, false); instr.textContent = "Cancelled"; }
+upForm.onsubmit = async (ev) => {
+  ev.preventDefault();
+  upResult.textContent = "Processing...";
+  const r = await (await fetch(`/api/enroll/${EMP}/upload`, {method: "POST", headers: {"X-CSRF-Token": CSRF}, body: new FormData(upForm)})).json();
+  upResult.innerHTML = `<p><span class="badge ${r.ok ? "b-on-time" : "b-absent"}">${esc(r.msg)}</span></p>` +
+    (r.notes ? `<ul class="results small">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "");
+};
+poll();
+</script>
+{% endblock %}

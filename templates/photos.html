@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Photos{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Attendance photos</h1>
+    <p class="muted">Read live from MongoDB · <code>netraattend.photos</code> · {{ total }} photos ({{ size_kb }} KB) · each is deleted automatically after {{ keep_days }} days</p></div>
+  <form method="get" class="row">
+    <input type="date" name="date" value="{{ day }}" style="width:auto">
+    <button class="btn">Show</button>
+  </form>
+</div>
+{% if days %}<div class="chips mb">{% for d in days %}<a class="chip" href="{{ url_for('photos_page', date=d) }}" {% if d == day %}style="border-color:var(--brand);color:var(--brand)"{% endif %}>{{ d }}</a>{% endfor %}</div>{% endif %}
+<div class="card">
+  {% if items %}
+  <div class="row" style="align-items:flex-start;gap:14px">
+    {% for p in items %}
+    <figure style="margin:0;display:grid;gap:4px;width:150px">
+      <img src="{{ url_for('snapshot', rel=p.photo) }}" alt="{{ p.name }} {{ p.kind }}" loading="lazy"
+           style="width:150px;height:190px;object-fit:cover;border-radius:10px;background:var(--line);cursor:zoom-in" onclick="zoom(this.src)">
+      <figcaption><b>{{ p.name }}</b><br>
+        <span class="badge b-{{ p.kind|lower }}">{{ p.kind }} {{ p.time }}</span>
+        <div class="small muted" style="overflow-wrap:anywhere">{{ p.photo }}</div></figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No photos stored for {{ day }}.</p>
+  {% endif %}
+</div>
+<p class="small muted">The name under each photo (e.g. <code>{{ items[0].photo if items else day ~ '/7_in.jpg' }}</code>) is the <code>_id</code> of that photo in MongoDB Compass → <code>netraattend</code> → <code>photos</code>. Compass shows the image only as Binary; this page shows the same data as pictures.</p>
+{% endblock %}

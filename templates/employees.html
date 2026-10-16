@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Employees{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Employees</h1><p class="muted">{{ counts.active }} active{% if counts.total != counts.active %} · {{ counts.total - counts.active }} disabled{% endif %}</p></div>
+  <button class="btn" type="button" onclick="document.getElementById('addDlg').showModal()">+ Add employee</button>
+</div>
+
+<div class="tiles">
+  <div class="tile"><div class="k">Active</div><div class="v">{{ counts.active }}</div></div>
+  <div class="tile ok"><div class="k">In today</div><div class="v">{{ counts.in_today }}</div></div>
+  <div class="tile ok"><div class="k">Face registered</div><div class="v">{{ counts.registered }}</div></div>
+  <div class="tile {{ 'bad' if counts.not_registered }}"><div class="k">Face not registered</div><div class="v">{{ counts.not_registered }}</div></div>
+  <div class="tile"><div class="k">Field allowed</div><div class="v">{{ counts.field }}</div></div>
+  <div class="tile {{ 'warn' if counts.no_password }}"><div class="k">No login password</div><div class="v">{{ counts.no_password }}</div></div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <input id="search" type="search" placeholder="Search name, ID or department" style="max-width:320px" autocomplete="off">
+    <div class="chips" id="filters">
+      <button type="button" class="chip on" data-f="">All</button>
+      <button type="button" class="chip" data-f="noface">Face not registered</button>
+      <button type="button" class="chip" data-f="field">Field</button>
+      <button type="button" class="chip" data-f="nopwd">No password</button>
+      <button type="button" class="chip" data-f="disabled">Disabled</button>
+    </div>
+  </div>
+  <div class="table-wrap"><table class="table" id="empTable">
+    <thead><tr><th>Employee</th><th>Department</th><th>Today</th><th>Face</th><th>Login</th><th>Access</th><th></th></tr></thead>
+    <tbody>
+    {% for e in emps %}
+      <tr data-search="{{ (e.name ~ ' ' ~ e.emp_code ~ ' ' ~ (e.department or ''))|lower }}"
+          data-flags="{{ 'noface ' if not e.samples }}{{ 'field ' if e.field_allowed }}{{ 'nopwd ' if not e.has_password }}{{ 'disabled' if not e.active }}"
+          {% if not e.active %}style="opacity:.6"{% endif %}>
+        <td><div class="who"><img class="avatar" src="{{ url_for('employee_photo', emp_id=e.id) }}" alt="">
+          <div><b>{{ e.name }}</b><span class="small muted">{{ e.emp_code }}{% if not e.active %} · disabled{% endif %}</span></div></div></td>
+        <td>{{ e.department or '-' }}</td>
+        <td>{% if e.today_status %}<span class="badge {{ e.today_status|sc }}">{{ e.today_status }}{% if e.late_min %} +{{ e.late_min|hm }}{% endif %}</span>
+            {% if e.today_in %}<div class="small muted num">IN {{ e.today_in }}</div>{% endif %}{% else %}<span class="small muted">-</span>{% endif %}</td>
+        <td>{% if e.samples %}<a href="{{ url_for('face_photos', emp_id=e.id) }}" title="See saved face photos">{{ e.samples }} photos</a>
+            <div class="small muted">{{ e.poses|join(', ') }}</div>
+            {% else %}<a class="badge b-absent" href="{{ url_for('enroll_page', emp_id=e.id) }}">Not registered</a>{% endif %}</td>
+        <td>{% if e.has_password %}<span class="badge b-on-time">Password set</span>{% else %}<span class="badge b-late" title="Set a password with Edit so this employee can log in">No password</span>{% endif %}</td>
+        <td>{% if e.field_allowed %}<span class="badge b-out" title="Can mark attendance from outside with selfie + location">Field</span>{% else %}<span class="small muted">Office</span>{% endif %}</td>
+        <td><div class="row" style="gap:6px;flex-wrap:nowrap">
+          <a class="btn sm" href="{{ url_for('enroll_page', emp_id=e.id) }}">{{ 'Re-scan' if e.samples else 'Register face' }}</a>
+          <button class="btn ghost sm" type="button" onclick="document.getElementById('edit{{ e.id }}').showModal()">Edit</button>
+          <form class="inline" method="post" action="{{ url_for('employee_toggle', emp_id=e.id) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn ghost sm">{{ 'Disable' if e.active else 'Enable' }}</button></form>
+          <form class="inline" method="post" action="{{ url_for('employee_delete', emp_id=e.id) }}" data-confirm="Delete {{ e.name }} ({{ e.emp_code }}) and ALL their attendance history?"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="btn danger sm">Delete</button></form>
+        </div>
+        <dialog id="edit{{ e.id }}"><form method="post" action="{{ url_for('employee_edit', emp_id=e.id) }}">
+          <h2>Edit {{ e.name }}</h2><input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <div class="form-grid">
+            <div class="full"><label class="f">Name</label><input name="name" value="{{ e.name }}" required></div>
+            <div><label class="f">Employee ID</label><input name="emp_code" value="{{ e.emp_code }}" required></div>
+            <div><label class="f">Department</label><input name="department" value="{{ e.department }}"></div>
+            <div class="full"><label class="f">{{ 'New password (blank = unchanged)' if e.has_password else 'Login password (not set yet)' }}</label><input name="password" type="password" autocomplete="new-password"></div>
+            <div class="full checks"><label><input type="checkbox" name="field_allowed" value="1" {{ 'checked' if e.field_allowed }}> Field work allowed (selfie + location attendance from outside)</label></div>
+          </div>
+          <div class="row" style="margin-top:12px"><button class="btn">Save</button><button class="btn ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
+        </form></dialog></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="empty">No employees yet. Click <b>+ Add employee</b>.</td></tr>
+    {% endfor %}
+    <tr id="noMatch" hidden><td colspan="7" class="empty">No employee matches.</td></tr>
+    </tbody></table></div>
+</div>
+
+<dialog id="addDlg"><form method="post" action="{{ url_for('employee_add') }}">
+  <h2>Add employee</h2>
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <div class="form-grid">
+    <div class="full"><label class="f" for="addName">Name *</label><input name="name" id="addName" required></div>
+    <div><label class="f" for="addCode">Employee ID *</label><input name="emp_code" id="addCode" required></div>
+    <div><label class="f" for="addDept">Department</label><input name="department" id="addDept"></div>
+    <div class="full"><label class="f" for="addPwd">Login password (for the employee panel)</label><input name="password" id="addPwd" type="password" autocomplete="new-password"></div>
+    <div class="full checks"><label><input type="checkbox" name="field_allowed" value="1"> Field work allowed (selfie + location attendance from outside)</label></div>
+    <p class="full small muted" style="margin:0">After saving, the face registration page opens.</p>
+  </div>
+  <div class="row" style="margin-top:12px"><button class="btn">Add &amp; register face</button><button class="btn ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
+</form></dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const rows = [...document.querySelectorAll("#empTable tbody tr[data-search]")];
+  const search = document.getElementById("search"), none = document.getElementById("noMatch");
+  let flag = "";
+  function apply() {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(r => {
+      const ok = (!q || r.dataset.search.includes(q)) && (!flag || r.dataset.flags.split(" ").includes(flag));
+      r.hidden = !ok; if (ok) shown++;
+    });
+    none.hidden = shown > 0 || !rows.length;
+  }
+  search.addEventListener("input", apply);
+  document.querySelectorAll("#filters .chip").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("#filters .chip").forEach(x => x.classList.toggle("on", x === b));
+    flag = b.dataset.f; apply();
+  }));
+})();
+</script>
+{% endblock %}

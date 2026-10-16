@@ -1,0 +1,14 @@
+.venv/
+.venv-service/
+__pycache__/
+*.pyc
+config.py
+.env
+logs/
+backups/
+data/
+deploy/*.bat
+deploy/*.ps1
+*.zip
+models/det_10g.onnx
+models/w600k_r50.onnx
