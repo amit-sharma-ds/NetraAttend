@@ -12,6 +12,17 @@
   </form>
   <p class="small" style="margin-bottom:0">Status: <span id="camStatus"><span class="dot {{ 'on' if stats.camera.connected else 'off' }}"></span>{{ 'Connected' if stats.camera.connected else 'Not connected' }} {{ stats.camera.size }}</span></p>
 </div>
+<div class="card" id="out-camera">
+  <h2>OUT camera (exit)</h2>
+  <p class="small muted" style="margin-top:0">Optional second camera at the exit door. When it is set, the camera above marks only <b>IN</b> and this one marks <b>OUT</b>. Leave it empty to keep one camera for both. Same login as the camera above? Just type its IP.</p>
+  <form method="post" action="/settings/out-camera" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div><label class="f">OUT camera IP</label><input name="camera_ip" value="{{ out_camera_ip }}" placeholder="e.g. 192.168.1.182"></div>
+    <div style="grid-column:span 2"><label class="f">Full RTSP link (advanced - *** = saved password)</label><input name="camera_link" value="{{ out_camera }}" placeholder="rtsp://admin:password@192.168.1.182:554/stream1"></div>
+    <div class="row"><button class="btn">Save &amp; connect</button>{% if out_camera %}<button class="btn ghost" name="remove" value="1">Remove</button>{% endif %}</div>
+  </form>
+  <p class="small" style="margin-bottom:0">Status: <span id="outCamStatus">{% if not out_camera %}<span class="dot off"></span>Not set - one camera marks IN and OUT{% elif stats.out_camera %}<span class="dot {{ 'on' if stats.out_camera.connected else 'off' }}"></span>{{ 'Connected' if stats.out_camera.connected else 'Not connected' }} {{ stats.out_camera.size }}{% else %}<span class="dot off"></span>Saved{% endif %}</span></p>
+</div>
 <div class="card">
   <h2>Office timing</h2>
   <form method="post" class="form-grid">
@@ -50,9 +61,11 @@
 // live camera status, so a new IP can be checked right after saving
 async function camStatus(){
   try {
-    const c = (await (await fetch("/api/status")).json()).camera;
+    const s = await (await fetch("/api/status")).json(), c = s.camera, o = s.out_camera;
     document.getElementById("camStatus").innerHTML =
       `<span class="dot ${c.connected ? "on" : "off"}"></span>${c.connected ? "Connected " + c.size + " · " + c.fps + " fps" : "Not connected - check the IP / camera"}`;
+    if (o) document.getElementById("outCamStatus").innerHTML =
+      `<span class="dot ${o.connected ? "on" : "off"}"></span>${o.connected ? "Connected " + o.size + " · " + o.fps + " fps" : "Not connected - check the IP / camera"}`;
   } catch (e) {}
 }
 camStatus(); setInterval(camStatus, 3000);

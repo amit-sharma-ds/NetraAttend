@@ -13,6 +13,7 @@ from db import db, get_settings, now_str, put_photo
 
 VISIT_GAP_MIN = 3     # not seen for this long -> the next sighting is a new movement (OUT)
 MAX_PENDING = 3000    # sightings kept in memory while the database is unreachable
+EXIT_AFTER_IN_SEC = 120   # exit camera ignores a person this soon after their check-in (turning at the door)
 
 
 def parse_hm(value):
@@ -120,15 +121,17 @@ class Recorder:
             return None
         return datetime.combine(day, parse_clock(row.get("check_out") or row["check_in"]))
 
-    def record(self, emp_id, when, score, snap_jpg):
+    def record(self, emp_id, when, score, snap_jpg, direction=None):
+        """direction None = the only camera (IN and OUT as above); "in" / "out" = the
+        entrance / exit camera when an exit camera is set (see _record_dir)."""
         try:
-            return self._record(emp_id, when, score, snap_jpg)
+            return self._record(emp_id, when, score, snap_jpg, direction)
         except PyMongoError as exc:
             with self.pending_lock:
                 if not self.pending:
                     print(f"Database unreachable ({type(exc).__name__}) - holding attendance "
                           f"in memory until it is back", flush=True)
-                self.pending.append((emp_id, when, score, snap_jpg))
+                self.pending.append((emp_id, when, score, snap_jpg, direction))
             return {"kind": "QUEUED", "time": when.strftime("%H:%M"), "status": "",
                     "late_min": 0, "photo": None, "fresh": False}
 
@@ -149,7 +152,9 @@ class Recorder:
                 if not self.pending:
                     print("Database back - queued attendance saved", flush=True)
 
-    def _record(self, emp_id, when, score, snap_jpg, replay=False):
+    def _record(self, emp_id, when, score, snap_jpg, direction=None, replay=False):
+        if direction in ("in", "out"):
+            return self._record_dir(emp_id, when, score, snap_jpg, direction, replay)
         with self.lock:
             d = db()
             day = when.strftime("%Y-%m-%d")
@@ -206,6 +211,96 @@ class Recorder:
             # only remember the sighting once it is safely in the database
             self.last_seen[emp_id] = when
             self.last[emp_id] = (now_mono, result)
+            return dict(result, fresh=fresh)
+
+    @staticmethod
+    def _seed_last_event(emp_id, day, kind):
+        """After a restart: time of today's last camera IN / OUT movement."""
+        ev = db().events.find_one({"emp_id": emp_id, "kind": kind, "source": {"$exists": False},
+                                   "ts": {"$gte": f"{day} 00:00:00", "$lte": f"{day} 23:59:59"}},
+                                  sort=[("ts", -1)])
+        return datetime.strptime(ev["ts"], "%Y-%m-%d %H:%M:%S") if ev else None
+
+    def _record_dir(self, emp_id, when, score, snap_jpg, direction, replay):
+        """Two cameras: the entrance camera marks IN, the exit camera marks OUT.
+
+        - entrance camera: first sighting of the day = check-in. Coming back in after
+          an OUT = a new IN movement (photo + log). Seen again while already in = nothing.
+        - exit camera: every new appearance = an OUT movement (photo + log) and the
+          latest check-out; standing in view keeps the check-out time current.
+          Hours stay first IN to last OUT, same as with one camera.
+        - someone the entrance camera missed but the exit camera sees is still marked
+          present (check-in at that time) so the day is not lost.
+        """
+        with self.lock:
+            d = db()
+            day = when.strftime("%Y-%m-%d")
+            clock = when.strftime("%H:%M:%S")
+            key = (emp_id, direction)
+            last = self.last_seen.get(key)
+            if last is None or last.date() != when.date():
+                last = self._seed_last_event(emp_id, when.date(), "IN" if direction == "in" else "OUT")
+            new_visit = last is None or when - last >= timedelta(minutes=VISIT_GAP_MIN)
+
+            now_mono = time.monotonic()
+            prev = self.last.get(key)
+            if not replay and not new_visit and prev and now_mono - prev[0] < config.COOLDOWN_SEC:
+                self.last_seen[key] = when
+                return dict(prev[1], fresh=False)
+
+            rules = self.rules()
+            row = d.attendance.find_one({"emp_id": emp_id, "date": day})
+            fresh = new_visit
+            if row is None:
+                photo = self._save_snapshot(snap_jpg, day, emp_id, "in")
+                try:
+                    d.attendance.insert_one({"emp_id": emp_id, "date": day, "check_in": clock,
+                                             "check_out": None, "in_photo": photo, "out_photo": None,
+                                             "in_score": score, "source": "camera", "note": ""})
+                except DuplicateKeyError:
+                    pass
+                d.events.insert_one({"emp_id": emp_id, "ts": f"{day} {clock}", "kind": "IN",
+                                     "score": score, "photo": photo})
+                ev = rules.evaluate(when.date(), clock, None, when.date())
+                result = {"kind": "IN", "time": clock[:5], "status": ev["status"],
+                          "late_min": ev["late_min"], "photo": photo}
+                fresh = True
+            elif direction == "in":
+                latest = d.events.find_one({"emp_id": emp_id, "ts": {"$gte": f"{day} 00:00:00",
+                                                                      "$lte": f"{day} {clock}"}},
+                                           sort=[("ts", -1)])
+                if new_visit and latest is not None and latest["kind"] == "OUT":
+                    photo = self._save_snapshot(snap_jpg, day, emp_id, when.strftime("%H%M%S"))
+                    d.events.insert_one({"emp_id": emp_id, "ts": f"{day} {clock}", "kind": "IN",
+                                         "score": score, "photo": photo})
+                    result = {"kind": "IN", "time": clock[:5], "status": "Back in", "late_min": 0,
+                              "photo": photo}
+                else:
+                    ev = rules.evaluate(when.date(), row["check_in"], None, when.date())
+                    result = {"kind": "SEEN", "time": row["check_in"][:5],
+                              "status": ev["status"], "late_min": ev["late_min"], "photo": None}
+            else:
+                check_in = datetime.combine(when.date(), parse_clock(row["check_in"]))
+                if when - check_in < timedelta(seconds=EXIT_AFTER_IN_SEC):
+                    ev = rules.evaluate(when.date(), row["check_in"], None, when.date())
+                    result = {"kind": "SEEN", "time": row["check_in"][:5],
+                              "status": ev["status"], "late_min": ev["late_min"], "photo": None}
+                    fresh = False
+                else:
+                    if new_visit:
+                        photo = self._save_snapshot(snap_jpg, day, emp_id, when.strftime("%H%M%S"))
+                        d.attendance.update_one({"_id": row["_id"]},
+                                                {"$set": {"check_out": clock, "out_photo": photo}})
+                        d.events.insert_one({"emp_id": emp_id, "ts": f"{day} {clock}", "kind": "OUT",
+                                             "score": score, "photo": photo})
+                    else:
+                        photo = None
+                        d.attendance.update_one({"_id": row["_id"]}, {"$set": {"check_out": clock}})
+                    hours = round((when - check_in).total_seconds() / 3600, 2)
+                    result = {"kind": "OUT", "time": clock[:5], "status": "", "late_min": 0,
+                              "photo": photo, "hours": hours}
+            self.last_seen[key] = when
+            self.last[key] = (now_mono, result)
             return dict(result, fresh=fresh)
 
 

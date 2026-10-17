@@ -245,20 +245,34 @@ def dashboard():
 @app.route("/live")
 @admin_required
 def live():
-    return render_template("live.html")
+    return render_template("live.html", has_out=bool(engine.out_camera_url()))
+
+
+def still_image(line1, line2):
+    img = np.full((360, 640, 3), 30, np.uint8)
+    cv2.putText(img, line1, (60, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, line2, (100, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (170, 170, 170), 1, cv2.LINE_AA)
+    return Response(cv2.imencode(".jpg", img)[1].tobytes(), mimetype="image/jpeg")
 
 
 @app.route("/video_feed")
 @admin_required
 def video_feed():
     if WEB_ONLY:   # the camera is on the office network, not reachable from the cloud
-        img = np.full((360, 640, 3), 30, np.uint8)
-        cv2.putText(img, "Live camera is on the office PC", (60, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                    (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(img, "Open the office link to watch it", (100, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (170, 170, 170), 1, cv2.LINE_AA)
-        return Response(cv2.imencode(".jpg", img)[1].tobytes(), mimetype="image/jpeg")
+        return still_image("Live camera is on the office PC", "Open the office link to watch it")
     return Response(engine.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
+
+
+@app.route("/video_feed/out")
+@admin_required
+def video_feed_out():
+    out = engine.out
+    if WEB_ONLY:
+        return still_image("Live camera is on the office PC", "Open the office link to watch it")
+    if out is None:
+        return still_image("No OUT camera", "Add one in Settings")
+    return Response(out.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
                     headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
 
@@ -622,8 +636,11 @@ def settings():
     s = get_settings()
     off = {int(x) for x in s["weekly_off"].split(",") if x.strip().isdigit()}
     cam = engine.camera_url()
+    out_cam = engine.out_camera_url()
     return render_template("settings.html", s=s, off=off, weekdays=WEEKDAYS, stats=engine.stats(),
-                           camera=mask_url(cam), camera_ip=camera_host(cam), db_name=config.MONGO_DB)
+                           camera=mask_url(cam), camera_ip=camera_host(cam), db_name=config.MONGO_DB,
+                           out_camera=mask_url(out_cam) if out_cam else "",
+                           out_camera_ip=camera_host(out_cam) if out_cam else "")
 
 
 def camera_host(url):
@@ -674,6 +691,68 @@ def camera_settings():
         engine.set_camera(new)
         flash(f"Camera changed to {mask_url(new)} - connecting...", "success")
     return redirect(url_for("settings") + "#camera")
+
+
+def same_camera(a, b):
+    """Two links to the same camera stream (host + port + path)."""
+    try:
+        pa, pb = urlsplit(str(a)), urlsplit(str(b))
+        return (pa.hostname, pa.port, pa.path) == (pb.hostname, pb.port, pb.path) and bool(pa.hostname)
+    except ValueError:
+        return False
+
+
+@app.route("/settings/out-camera", methods=["POST"])
+@admin_required
+def out_camera_settings():
+    """Second camera at the exit: it marks OUT, the main camera then marks only IN.
+    Empty = one camera marks both, as before."""
+    back = url_for("settings") + "#out-camera"
+    current = str(engine.out_camera_url())
+    if request.form.get("remove"):
+        save_settings({"out_camera_url": ""})
+        if not WEB_ONLY:
+            engine.set_out_camera("")
+        flash("OUT camera removed - the main camera marks IN and OUT again.", "success")
+        return redirect(back)
+    in_cam = str(engine.camera_url())
+    ip = request.form.get("camera_ip", "").strip()
+    link = request.form.get("camera_link", "").strip()
+    new = current
+    if link and link != mask_url(current):
+        # password left masked (***): keep the saved one - this camera's, else the IN camera's
+        saved_pwd = re.search(r"://[^:/@]+:([^@]*)@", current) or re.search(r"://[^:/@]+:([^@]*)@", in_cam)
+        if ":***@" in link and saved_pwd:
+            link = link.replace(":***@", f":{saved_pwd.group(1)}@", 1)
+        new = link
+    if ip and ip != camera_host(new):
+        if not re.fullmatch(r"[A-Za-z0-9.\-]+", ip):
+            flash("Camera IP looks wrong, e.g. 192.168.1.182", "error")
+            return redirect(back)
+        base = new or in_cam   # only an IP typed: same user, password, port and path as the IN camera
+        if not base.startswith("rtsp://"):
+            flash("Type the full RTSP link of the OUT camera.", "error")
+            return redirect(back)
+        new = with_host(base, ip)
+    if not new:
+        flash("Type the OUT camera's IP or its full RTSP link.", "error")
+        return redirect(back)
+    if not (new.startswith(("rtsp://", "rtsps://", "http://", "https://")) or new.isdigit()):
+        flash("Camera link must start with rtsp://", "error")
+        return redirect(back)
+    if new == in_cam or same_camera(new, in_cam):
+        flash("The OUT camera must be a different camera from the IN camera.", "error")
+        return redirect(back)
+    if new == current:
+        flash("OUT camera unchanged.", "info")
+        return redirect(back)
+    save_settings({"out_camera_url": new})
+    if WEB_ONLY:
+        flash(f"OUT camera saved ({mask_url(new)}). The office PC connects to it within a minute.", "success")
+    else:
+        engine.set_out_camera(new)
+        flash(f"OUT camera set to {mask_url(new)} - connecting...", "success")
+    return redirect(back)
 
 
 # ------------------------------------------------------------------ employee self-service
@@ -996,6 +1075,8 @@ def camera_release():
     if request.remote_addr not in ("127.0.0.1", "::1"):
         abort(403)
     engine.camera.stop()
+    if engine.out is not None:
+        engine.out.camera.stop()
     return jsonify(ok=True)
 
 

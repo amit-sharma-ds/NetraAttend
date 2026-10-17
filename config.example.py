@@ -15,6 +15,9 @@ NETRA_<NAME>, e.g. NETRA_CAMERA=0 to test with a webcam.
 CAMERA = "rtsp://USERNAME:PASSWORD@192.168.1.181:554/stream1"
 CAMERA_ROTATE = 0            # 0, 90, 180 or 270
 CAMERA_AUTO_REBOOT = True    # restart the camera if it stays stuck ("404 Stream Not Found")
+# Optional second camera at the exit: it marks OUT and CAMERA then marks only IN.
+# Usually set from the Settings page instead. "" = one camera marks both.
+OUT_CAMERA = ""
 
 # Part of the frame to scan for faces, as fractions (x1, y1, x2, y2).
 # Cropping to the entrance/door area makes far faces bigger and saves CPU.

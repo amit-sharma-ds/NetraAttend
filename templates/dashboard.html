@@ -49,8 +49,9 @@ async function refresh(){
   let d; try { d = await (await fetch("/api/today")).json(); } catch(e) { return; }
   document.getElementById("dateLabel").textContent = d.date_label + (d.day_off ? " · " + d.day_off : "");
   document.getElementById("officeChip").innerHTML = `Office <b>${d.office_start}</b> · grace ${d.grace} min · late after <b>${d.late_after}</b>`;
-  const cam = d.engine.camera;
-  document.getElementById("camChip").innerHTML = `<span class="dot ${cam.connected ? "on" : "off"}"></span>Camera ${cam.connected ? "online · " + cam.fps + " fps" : "offline"}`;
+  const cam = d.engine.camera, out = d.engine.out_camera;
+  document.getElementById("camChip").innerHTML = `<span class="dot ${cam.connected ? "on" : "off"}"></span>${out ? "IN camera" : "Camera"} ${cam.connected ? "online · " + cam.fps + " fps" : "offline"}`
+    + (out ? ` &nbsp;<span class="dot ${out.connected ? "on" : "off"}"></span>OUT camera ${out.connected ? "online · " + out.fps + " fps" : "offline"}` : "");
   const c = d.counts;
   cTotal.textContent = c.total; cPresent.textContent = c.present; cOnTime.textContent = c.on_time;
   cLate.textContent = c.late; cNotIn.textContent = c.not_in;

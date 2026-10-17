@@ -34,6 +34,8 @@ DEFAULT_SETTINGS = {
     "leave_types": "Casual Leave:12, Sick Leave:6, Unpaid Leave:0",   # name:days per year (0 = no limit)
     "camera_url": "",             # set from the Settings page; empty = config.CAMERA
     "camera_ok_url": "",          # last link that streamed (allows auto-reboot when stuck)
+    "out_camera_url": "",         # exit camera (marks OUT); empty = one camera marks IN and OUT
+    "out_camera_ok_url": "",
 }
 
 _db = None

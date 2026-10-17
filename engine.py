@@ -318,7 +318,8 @@ class Streamer:
                     self._text(img, _ascii(label), (x1, max(18, y1 - 4)), 0.55, (255, 255, 255), 1, color)
             for i, (_, text, color) in enumerate(banners[-3:]):
                 self._text(img, _ascii(text), (14, 34 + i * 36), 0.75, (255, 255, 255), 2, color)
-            st = f"{datetime.now():%H:%M:%S}  cam {cam.fps:.0f}fps  ai {eng.det_fps:.1f}fps"
+            tag = {"in": "IN camera  ", "out": "OUT camera  "}.get(eng.direction, "")
+            st = f"{tag}{datetime.now():%H:%M:%S}  cam {cam.fps:.0f}fps  ai {eng.det_fps:.1f}fps"
             self._text(img, st, (10, img.shape[0] - 8), 0.45, (255, 255, 255), 1, (40, 40, 40))
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(config.STREAM_QUALITY)])
         return buf.tobytes() if ok else None
@@ -344,12 +345,27 @@ def jpeg(img, quality=85):
 
 
 class Engine:
-    def __init__(self):
-        self.camera = self._make_camera(self.camera_url())
-        self.detector = Detector(config.DET_MODEL, config.DET_THREADS)
-        self.embedder = Embedder(config.REC_MODEL, config.REC_THREADS)
-        self.gallery = Gallery()
-        self.recorder = Recorder()
+    def __init__(self, main=None, url=None):
+        """main=None: the main camera (the only one, or the entrance camera).
+        main=<Engine>: the exit camera - its own camera, tracking and live view, sharing
+        the main engine's models, registered faces and attendance recorder."""
+        self.main = main
+        self.out = None              # exit camera pipeline (main engine only)
+        self.out_url = ""            # exit camera link in use ("" = only one camera)
+        self.camera_lock = threading.Lock()
+        if main is None:
+            self.camera = self._make_camera(self.camera_url())
+            self.detector = Detector(config.DET_MODEL, config.DET_THREADS)
+            self.embedder = Embedder(config.REC_MODEL, config.REC_THREADS)
+            self.gallery = Gallery()
+            self.recorder = Recorder()
+            self.recent = deque(maxlen=40)
+            self.last_learn = {}     # emp_id -> monotonic time of last auto sample
+        else:
+            self.camera = self._make_camera(url, "out_camera_ok_url")
+            self.detector, self.embedder = main.detector, main.embedder
+            self.gallery, self.recorder = main.gallery, main.recorder
+            self.recent, self.last_learn = main.recent, main.last_learn
         self.streamer = Streamer(self)
         self.lock = threading.Lock()
         self.tracks = {}
@@ -357,7 +373,6 @@ class Engine:
         self.overlay = []
         self.overlay_ts = 0.0
         self.banners = deque(maxlen=6)
-        self.recent = deque(maxlen=40)
         self.enroll = None
         self.work = threading.Event()
         self.running = False
@@ -365,8 +380,15 @@ class Engine:
         self.det_ms = 0.0
         self.rec_ms = 0.0
         self.last_face_time = 0.0
-        self.last_learn = {}     # emp_id -> monotonic time of last auto sample
-        self.load_gallery()
+        if main is None:
+            self.load_gallery()
+
+    @property
+    def direction(self):
+        """None = one camera marks IN and OUT; "in"/"out" = entrance/exit camera."""
+        if self.main is not None:
+            return "out"
+        return "in" if self.out_url else None
 
     # ------------------------------------------------------------ lifecycle
     def start(self, with_camera=True):
@@ -379,13 +401,18 @@ class Engine:
             self.streamer.start()
             threading.Thread(target=self._det_loop, daemon=True, name="detect").start()
             threading.Thread(target=self._rec_loop, daemon=True, name="recognise").start()
-        threading.Thread(target=self._flush_loop, daemon=True, name="db-retry").start()
+        if self.main is None:
+            threading.Thread(target=self._flush_loop, daemon=True, name="db-retry").start()
+            if with_camera and self.out_camera_url():
+                self.set_out_camera(self.out_camera_url())
 
     def stop(self):
         self.running = False
         self.streamer.running = False
         self.work.set()
         self.camera.stop()
+        if self.out is not None:
+            self.out.stop()
 
     def _flush_loop(self):
         last_sync = time.monotonic()
@@ -398,9 +425,14 @@ class Engine:
             try:
                 if not getattr(self, "with_camera", True):
                     self.load_gallery(reset_tracks=False)   # faces registered on the office PC
-                elif str(self.camera_url()) != str(self.camera.source):
-                    print("Camera link changed in Settings - switching", flush=True)
-                    self.set_camera(self.camera_url())
+                else:
+                    if str(self.camera_url()) != str(self.camera.source):
+                        print("Camera link changed in Settings - switching", flush=True)
+                        self.set_camera(self.camera_url())
+                    out_now = str(self.out.camera.source) if self.out is not None else ""
+                    if str(self.out_camera_url()) != out_now:
+                        print("OUT camera changed in Settings - switching", flush=True)
+                        self.set_out_camera(self.out_camera_url())
             except Exception:
                 traceback.print_exc()
 
@@ -411,22 +443,45 @@ class Engine:
         return get_settings().get("camera_url") or config.CAMERA
 
     @staticmethod
-    def _make_camera(url):
+    def out_camera_url():
+        """Exit (OUT) camera from the Settings page, else config.OUT_CAMERA; "" = none."""
+        return get_settings().get("out_camera_url") or getattr(config, "OUT_CAMERA", "") or ""
+
+    @staticmethod
+    def _make_camera(url, ok_key="camera_ok_url"):
         def remember(working_url):
-            save_settings({"camera_ok_url": working_url})
+            save_settings({ok_key: working_url})
         return CameraStream(url, config.CAMERA_ROTATE,
-                            known_good=get_settings().get("camera_ok_url") == str(url),
+                            known_good=get_settings().get(ok_key) == str(url),
                             on_connect=remember)
 
     def set_camera(self, url):
         """Switch to another camera/link without restarting the app."""
-        old = self.camera
-        old.stop()    # release first: this camera allows only one RTSP connection
-        self.camera = self._make_camera(url)
-        self.camera.start()
+        # one switch at a time: two at once (Settings page + background sync) could
+        # leave an old connection running forever
+        with self.camera_lock:
+            old = self.camera
+            old.stop()    # release first: this camera allows only one RTSP connection
+            self.camera = self._make_camera(url)
+            self.camera.start()
         with self.lock:
             self.tracks.clear()
             self.overlay = []
+
+    def set_out_camera(self, url):
+        """Add, switch or remove (url "") the exit camera without restarting the app."""
+        with self.camera_lock:
+            old, self.out = self.out, None
+            self.out_url = url or ""
+            if old is not None:
+                old.stop()
+            if url:
+                out = Engine(main=self, url=url)
+                out.start()
+                self.out = out
+        with self.lock:
+            for tr in self.tracks.values():   # IN/OUT meaning of this camera changed
+                tr.result = None
 
     # ------------------------------------------------------------ gallery
     def load_gallery(self, reset_tracks=True):
@@ -457,10 +512,13 @@ class Engine:
         self.gallery.set([(i, n, c, np.stack(m)) for i, n, c, m in groups])
         if not reset_tracks:
             return
-        with self.lock:
-            for tr in self.tracks.values():   # names/ids may have changed
-                tr.emp_id, tr.name, tr.result = None, None, None
-                tr.votes.clear()
+        for eng in (self, self.out):
+            if eng is None:
+                continue
+            with eng.lock:
+                for tr in eng.tracks.values():   # names/ids may have changed
+                    tr.emp_id, tr.name, tr.result = None, None, None
+                    tr.votes.clear()
         print(f"Face gallery: {len(groups)} employees, {len(rows)} samples", flush=True)
 
     def _auto_learn(self, emp_id, cand, emb, score, margin):
@@ -612,6 +670,8 @@ class Engine:
             if res and res["kind"] == "IN":
                 return f"{tr.name} | IN {res['time']} {res['status']}", GREEN
             if res and res["kind"] == "OUT":
+                if self.direction == "out":
+                    return f"{tr.name} | OUT {res['time']}", BLUE
                 return f"{tr.name} | seen {res['time']}", GREEN
             if res and res["kind"] == "SEEN":
                 return f"{tr.name} | in since {res['time']}", GREEN
@@ -718,7 +778,7 @@ class Engine:
         if to_record is None:
             return
         snap = jpeg(make_snapshot(cand["frame"], cand["bbox"], height=240), 80)
-        res = self.recorder.record(to_record, datetime.now(), round(score, 3), snap)
+        res = self.recorder.record(to_record, datetime.now(), round(score, 3), snap, self.direction)
         name = self.gallery.name(to_record)
         with self.lock:
             tr.result = res
@@ -891,6 +951,7 @@ class Engine:
         with self.lock:
             tracks = len(self.tracks)
             recent = list(self.recent)[:15]
+        out = self.out
         return {
             "camera": self.camera.status(),
             "det_fps": round(self.det_fps, 1),
@@ -900,4 +961,8 @@ class Engine:
             "employees": len(self.gallery.ids),
             "models": f"{config.DET_MODEL} + {config.REC_MODEL}",
             "recent": recent,
+            # exit camera: None when only one camera is used
+            "out_camera": out.camera.status() if out is not None else None,
+            "out_det_fps": round(out.det_fps, 1) if out is not None else None,
+            "out_faces": len(out.tracks) if out is not None else None,
         }
