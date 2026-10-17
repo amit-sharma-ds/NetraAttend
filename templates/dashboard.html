@@ -10,6 +10,7 @@
   <div class="tile ok"><div class="k">Present</div><div class="v" id="cPresent">-</div></div>
   <div class="tile ok"><div class="k">On Time</div><div class="v" id="cOnTime">-</div></div>
   <div class="tile warn"><div class="k">Late</div><div class="v" id="cLate">-</div></div>
+  <div class="tile half"><div class="k">Half Day</div><div class="v" id="cHalf">-</div></div>
   <div class="tile bad"><div class="k">Not In</div><div class="v" id="cNotIn">-</div></div>
 </div>
 <div class="grid-2 mb">
@@ -54,7 +55,7 @@ async function refresh(){
     + (out ? ` &nbsp;<span class="dot ${out.connected ? "on" : "off"}"></span>OUT camera ${out.connected ? "online · " + out.fps + " fps" : "offline"}` : "");
   const c = d.counts;
   cTotal.textContent = c.total; cPresent.textContent = c.present; cOnTime.textContent = c.on_time;
-  cLate.textContent = c.late; cNotIn.textContent = c.not_in;
+  cLate.textContent = c.late; cHalf.textContent = c.half_day; cNotIn.textContent = c.not_in;
   rows.innerHTML = d.rows.map(r => `<tr>
     <td><div class="who"><img class="avatar" src="/photo/${r.emp_id}" alt=""><div><b>${esc(r.name)}</b><span class="small muted">${esc(r.code)}</span></div></div></td>
     <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
