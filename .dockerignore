@@ -12,3 +12,4 @@ deploy/*.ps1
 *.zip
 models/det_10g.onnx
 models/w600k_r50.onnx
+tools/

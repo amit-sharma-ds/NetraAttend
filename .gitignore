@@ -7,3 +7,4 @@ models/*.onnx
 .venv-service/
 logs/
 backups/
+tools/

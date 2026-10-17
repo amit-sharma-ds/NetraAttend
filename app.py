@@ -6,10 +6,13 @@ Open: http://<this-pc-ip>:5000
 import atexit
 import hmac
 import ipaddress
+import os
 import re
 import secrets
 import sys
+import threading
 import time
+import urllib.request
 from datetime import date, datetime, timedelta
 from functools import wraps
 from urllib.parse import urlsplit, urlunsplit
@@ -1017,6 +1020,26 @@ def release_camera_on_window_close(stop):
     ctypes.windll.kernel32.SetConsoleCtrlHandler(_close_handler, True)
 
 
+def keep_awake():
+    """Render's free plan sleeps after 15 min without visitors and the next visit then
+    takes about a minute. Visiting our own public link every 10 min keeps it answering
+    straight away (punching machines, payroll). Render sets RENDER_EXTERNAL_URL itself."""
+    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not (url and getattr(config, "KEEP_AWAKE", False)):
+        return
+
+    def loop():
+        while True:
+            time.sleep(600)
+            try:
+                urllib.request.urlopen(url + "/login", timeout=60).read(64)
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="keep-awake", daemon=True).start()
+    print(f"Keep-awake: visiting {url} every 10 min", flush=True)
+
+
 def main():
     global engine
     init_db()
@@ -1028,6 +1051,7 @@ def main():
     release_camera_on_window_close(engine.stop)
     if WEB_ONLY:
         print("Role: web (cloud) - website + API, camera handled by the office PC", flush=True)
+    keep_awake()
     from waitress import serve
     print(f"NetraAttend running: http://127.0.0.1:{config.PORT}  (LAN: http://<this-pc-ip>:{config.PORT})",
           flush=True)

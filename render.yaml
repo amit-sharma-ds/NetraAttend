@@ -1,0 +1,34 @@
+# Render one-click deploy (Blueprint): website + API + employee panel in the cloud.
+# https://render.com/deploy?repo=https://github.com/amit-sharma-ds/NetraAttend
+# The CCTV camera stays on the office PC; both use the same MongoDB Atlas database.
+# Render asks for the two secret values (MongoDB link, admin password) while deploying.
+services:
+  - type: web
+    name: netraattend
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /login
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "5000"
+      - key: NETRA_ROLE
+        value: web
+      - key: NETRA_MONGO_URI
+        sync: false
+      - key: NETRA_MONGO_DB
+        value: netraattend
+      - key: NETRA_ADMIN_USER
+        value: admin
+      - key: NETRA_ADMIN_PASSWORD
+        sync: false
+      - key: NETRA_SECRET_KEY
+        generateValue: true
+      # admin pages reachable from the internet (protected by the admin password)
+      - key: NETRA_ADMIN_LAN_ONLY
+        value: "False"
+      # free plan sleeps after 15 min without visitors; a visit every 10 min keeps it awake
+      - key: NETRA_KEEP_AWAKE
+        value: "True"

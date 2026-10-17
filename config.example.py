@@ -34,6 +34,7 @@ SECRET_KEY = "change-me-to-a-long-random-string"
 ADMIN_USER = "admin"
 ADMIN_PASSWORD = "change-me"
 ADMIN_LAN_ONLY = True        # admin pages only from the office network (field staff may reach the app from the internet)
+KEEP_AWAKE = False           # Render free plan only: visit our own link every 10 min so it never sleeps
 
 # ---------------- Models & speed ----------------
 # Detector: "det_500m" (fast, good for faces up to ~4 m) or "det_10g"

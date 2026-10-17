@@ -8,6 +8,8 @@
 #   4. Scheduled task "NetraAttend": starts the app at boot as SYSTEM, no login needed,
 #      and keeps it running (netra_service.bat restarts it if it stops)
 #   5. Scheduled task "NetraAttend Backup": MongoDB backup every night at 23:30
+#   6. Scheduled task "NetraAttend Tunnel" (only if tools\cloudflared\cloudflared.exe exists):
+#      public https link at boot; the link changes after every restart (logs\public_link.txt)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $py = Join-Path $root ".venv-service\Scripts\python.exe"
@@ -61,14 +63,30 @@ Register-ScheduledTask -TaskName "NetraAttend Backup" -Action $bAction -Trigger 
     -Principal $principal -Description "NetraAttend nightly MongoDB backup (backups folder)" -Force | Out-Null
 Write-Host "   backups go to $root\backups (last 30 kept)"
 
+$cloudflared = Join-Path $root "tools\cloudflared\cloudflared.exe"
+if (Test-Path $cloudflared) {
+    Step "Public link task 'NetraAttend Tunnel' (Cloudflare quick tunnel, starts at boot)"
+    $tAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$root\deploy\public_link.ps1`" -Service" `
+        -WorkingDirectory $root
+    $tTrigger = New-ScheduledTaskTrigger -AtStartup
+    $tTrigger.Delay = "PT60S"
+    Register-ScheduledTask -TaskName "NetraAttend Tunnel" -Action $tAction -Trigger $tTrigger -Settings $settings `
+        -Principal $principal -Description "NetraAttend public https link (link changes after every restart)" -Force | Out-Null
+    Write-Host "   the current link is always in $root\logs\public_link.txt (or run deploy\PUBLIC_LINK.bat)"
+}
+
 Step "6/6 Starting NetraAttend"
 Start-ScheduledTask -TaskName "NetraAttend"
+if (Test-Path $cloudflared) { Start-ScheduledTask -TaskName "NetraAttend Tunnel" }
 $ok = $false
 for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Seconds 2
     try { if ((Invoke-WebRequest "http://127.0.0.1:$port/login" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { $ok = $true; break } } catch {}
 }
-$ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -First 1).IPAddress
+# the adapter with a default gateway is the office LAN (skips WSL / Hyper-V virtual adapters)
+$ip = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress
+if (-not $ip) { $ip = "THIS-PC-IP" }
 Write-Host ""
 if ($ok) {
     Write-Host "NetraAttend is running as a service." -ForegroundColor Green
@@ -76,6 +94,14 @@ if ($ok) {
     Write-Host "   Office network: http://${ip}:$port"
     Write-Host "   API docs:       http://${ip}:$port/api/docs"
     Write-Host "   Log file:       $root\logs\netraattend.log"
+    $linkFile = Join-Path $root "logs\public_link.txt"
+    if (Test-Path $cloudflared) {
+        for ($j = 0; $j -lt 30; $j++) {
+            if ((Test-Path $linkFile) -and ((Get-Item $linkFile).LastWriteTime -gt (Get-Date).AddMinutes(-3))) { break }
+            Start-Sleep -Seconds 2
+        }
+        if (Test-Path $linkFile) { Write-Host "   Public (https): $(Get-Content $linkFile | Select-Object -First 1)" }
+    }
     Write-Host "It starts by itself after every restart / power cut. If the camera was in use by another"
     Write-Host "copy, it reconnects by itself within about 2 minutes."
 } else {

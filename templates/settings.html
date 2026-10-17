@@ -30,6 +30,11 @@
   </form>
 </div>
 <div class="card">
+  <h2>API (punching machine / payroll)</h2>
+  <p class="small muted" style="margin-top:0">Create a key for another system and send it with the API documentation link.</p>
+  <div class="row"><a class="btn" href="{{ url_for('api_keys') }}">API keys</a> <a class="btn ghost" href="{{ url_for('api_docs') }}">API documentation</a></div>
+</div>
+<div class="card">
   <h2>System</h2>
   <table class="table">
     <tr><td>Database</td><td>MongoDB · {{ db_name }}</td></tr>

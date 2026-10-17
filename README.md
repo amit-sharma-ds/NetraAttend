@@ -24,6 +24,22 @@ Testing ke liye window me chalana ho to: `start.bat`.
 
 Admin login: `config.py` me `ADMIN_USER` / `ADMIN_PASSWORD` (default password zaroor badlo).
 
+## Cloud deployment – Render (website + API 24x7, fixed link)
+
+Camera aur face recognition office PC par hi rehte hain; Render par website, employee panel,
+field attendance aur API chalti hai. Dono same MongoDB Atlas use karte hain.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/amit-sharma-ds/NetraAttend)
+
+1. MongoDB Atlas → **Network Access** → "Allow access from anywhere" (0.0.0.0/0).
+2. Upar wala button → Render 2 cheezein poochega: `NETRA_MONGO_URI` (office PC ke `config.py`
+   wala link) aur `NETRA_ADMIN_PASSWORD` (strong password – internet se admin login khula hai).
+3. Deploy (pehli baar ~5-10 min). Link: `https://netraattend.onrender.com` (ya Render jo naam de).
+
+Free plan: 15 min bina visitor ke so jata hai – `NETRA_KEEP_AWAKE=True` har 10 min khud ko visit
+karke jagaye rakhta hai (750 free hours/month poore workspace me shared). Live camera view sirf
+office network par. Setup file: `render.yaml`.
+
 ## Kaam kaise karta hai
 
 1. **Employees** page → naam + Employee ID daalo → **Register face**.
