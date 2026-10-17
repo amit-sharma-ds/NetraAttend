@@ -675,6 +675,8 @@ class Engine:
                 return f"{tr.name} | seen {res['time']}", GREEN
             if res and res["kind"] == "SEEN":
                 return f"{tr.name} | in since {res['time']}", GREEN
+            if res and res["kind"] == "NOT_IN":
+                return f"{tr.name} | no IN today", GREY
             return tr.name, GREEN
         if tr.unknown:
             return "Unknown", RED

@@ -229,8 +229,8 @@ class Recorder:
         - exit camera: every new appearance = an OUT movement (photo + log) and the
           latest check-out; standing in view keeps the check-out time current.
           Hours stay first IN to last OUT, same as with one camera.
-        - the two stay separate: the exit camera never marks IN. Someone it sees with no
-          IN today is only logged as OUT (photo + activity) so the admin can fix the day.
+        - the two stay separate: the exit camera never marks IN, and nobody is marked
+          OUT before they have an IN that day (nothing is written until then).
         """
         with self.lock:
             d = db()
@@ -252,13 +252,10 @@ class Recorder:
             row = d.attendance.find_one({"emp_id": emp_id, "date": day})
             fresh = new_visit
             if row is None and direction == "out":
-                photo = None
-                if new_visit:
-                    photo = self._save_snapshot(snap_jpg, day, emp_id, when.strftime("%H%M%S"))
-                    d.events.insert_one({"emp_id": emp_id, "ts": f"{day} {clock}", "kind": "OUT",
-                                         "score": score, "photo": photo})
-                result = {"kind": "OUT", "time": clock[:5], "status": "No IN today", "late_min": 0,
-                          "photo": photo, "hours": "-"}
+                # no IN today yet: no OUT either - attendance starts with an IN
+                result = {"kind": "NOT_IN", "time": clock[:5], "status": "", "late_min": 0,
+                          "photo": None}
+                fresh = False
             elif row is None:
                 photo = self._save_snapshot(snap_jpg, day, emp_id, "in")
                 try:
