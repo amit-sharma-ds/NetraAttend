@@ -224,8 +224,8 @@ class Recorder:
     def _record_dir(self, emp_id, when, score, snap_jpg, direction, replay):
         """Two cameras: the entrance camera marks IN, the exit camera marks OUT.
 
-        - entrance camera: first sighting of the day = check-in. Coming back in after
-          an OUT = a new IN movement (photo + log). Seen again while already in = nothing.
+        - entrance camera: first sighting of the day = check-in. One IN per person per
+          day: seen again later (even after an OUT) = nothing.
         - exit camera: every new appearance = an OUT movement (photo + log) and the
           latest check-out; standing in view keeps the check-out time current.
           Hours stay first IN to last OUT, same as with one camera.
@@ -274,19 +274,10 @@ class Recorder:
                           "late_min": ev["late_min"], "photo": photo}
                 fresh = True
             elif direction == "in":
-                latest = d.events.find_one({"emp_id": emp_id, "ts": {"$gte": f"{day} 00:00:00",
-                                                                      "$lte": f"{day} {clock}"}},
-                                           sort=[("ts", -1)])
-                if new_visit and latest is not None and latest["kind"] == "OUT":
-                    photo = self._save_snapshot(snap_jpg, day, emp_id, when.strftime("%H%M%S"))
-                    d.events.insert_one({"emp_id": emp_id, "ts": f"{day} {clock}", "kind": "IN",
-                                         "score": score, "photo": photo})
-                    result = {"kind": "IN", "time": clock[:5], "status": "Back in", "late_min": 0,
-                              "photo": photo}
-                else:
-                    ev = rules.evaluate(when.date(), row["check_in"], None, when.date())
-                    result = {"kind": "SEEN", "time": row["check_in"][:5],
-                              "status": ev["status"], "late_min": ev["late_min"], "photo": None}
+                # already checked in today: one IN per day, nothing more is written
+                ev = rules.evaluate(when.date(), row["check_in"], None, when.date())
+                result = {"kind": "SEEN", "time": row["check_in"][:5],
+                          "status": ev["status"], "late_min": ev["late_min"], "photo": None}
             else:
                 check_in = datetime.combine(when.date(), parse_clock(row["check_in"]))
                 if when - check_in < timedelta(seconds=EXIT_AFTER_IN_SEC):
@@ -381,6 +372,8 @@ def record_field(emp_id, when, kind, photo, lat, lng, accuracy, note, verified, 
         raise ValueError(f"Already marked {kind} at {last['ts'][11:16]}.")
     if kind == "OUT" and row is None:
         raise ValueError("Mark IN first.")
+    if kind == "IN" and row is not None:   # one IN per person per day
+        raise ValueError(f"Already IN today at {row['check_in'][:5]}.")
     if row is None:
         try:
             d.attendance.insert_one({"emp_id": emp_id, "date": day, "check_in": clock, "check_out": None,
