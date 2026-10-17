@@ -665,6 +665,9 @@ def camera_settings():
     current = str(engine.camera_url())
     ip = request.form.get("camera_ip", "").strip()
     link = request.form.get("camera_link", "").strip()
+    if ip == request.form.get("shown_ip", "").strip():
+        ip = ""    # IP box not touched: the link decides (editing only the link must not be undone)
+    keep = url_for("settings", keep="in") + "#camera"   # failed: the page shows what was typed again
     new = current
     if link and link != mask_url(current):
         saved_pwd = re.search(r"://[^:/@]+:([^@]*)@", current)
@@ -674,14 +677,14 @@ def camera_settings():
     if ip and ip != camera_host(new):
         if not re.fullmatch(r"[A-Za-z0-9.\-]+", ip):
             flash("Camera IP looks wrong, e.g. 192.168.1.181", "error")
-            return redirect(url_for("settings") + "#camera")
+            return redirect(keep)
         if not new.startswith("rtsp://"):
             flash("To change only the IP, the camera link must be an rtsp:// link.", "error")
-            return redirect(url_for("settings") + "#camera")
+            return redirect(keep)
         new = with_host(new, ip)
     if not (new.startswith(("rtsp://", "rtsps://", "http://", "https://")) or new.isdigit()):
         flash("Camera link must start with rtsp://", "error")
-        return redirect(url_for("settings") + "#camera")
+        return redirect(keep)
     if new == current:
         flash("Camera unchanged.", "info")
         return redirect(url_for("settings") + "#camera")
@@ -709,6 +712,7 @@ def out_camera_settings():
     """Second camera at the exit: it marks OUT, the main camera then marks only IN.
     Empty = one camera marks both, as before."""
     back = url_for("settings") + "#out-camera"
+    keep = url_for("settings", keep="out") + "#out-camera"   # failed: show what was typed again
     current = str(engine.out_camera_url())
     if request.form.get("remove"):
         save_settings({"out_camera_url": ""})
@@ -731,21 +735,21 @@ def out_camera_settings():
     if ip and ip != camera_host(new):
         if not re.fullmatch(r"[A-Za-z0-9.\-]+", ip):
             flash("Camera IP looks wrong, e.g. 192.168.1.182", "error")
-            return redirect(back)
+            return redirect(keep)
         base = new or in_cam   # only an IP typed: same user, password, port and path as the IN camera
         if not base.startswith("rtsp://"):
             flash("Type the full RTSP link of the OUT camera.", "error")
-            return redirect(back)
+            return redirect(keep)
         new = with_host(base, ip)
     if not new:
         flash("Type the OUT camera's IP or its full RTSP link.", "error")
-        return redirect(back)
+        return redirect(keep)
     if not (new.startswith(("rtsp://", "rtsps://", "http://", "https://")) or new.isdigit()):
         flash("Camera link must start with rtsp://", "error")
-        return redirect(back)
+        return redirect(keep)
     if new == in_cam or same_camera(new, in_cam):
         flash("The OUT camera must be a different camera from the IN camera.", "error")
-        return redirect(back)
+        return redirect(keep)
     if new == current:
         flash("OUT camera unchanged.", "info")
         return redirect(back)

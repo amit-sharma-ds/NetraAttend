@@ -4,23 +4,24 @@
 <div class="card" id="camera">
   <h2>Camera</h2>
   <p class="small muted" style="margin-top:0">If the camera's IP changes, type the new IP and press <b>Save &amp; connect</b>. The app switches to it straight away - no restart needed.</p>
-  <form method="post" action="{{ url_for('camera_settings') }}" class="form-grid">
+  <form method="post" action="{{ url_for('camera_settings') }}" class="form-grid cam-form" data-cam="in">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="shown_ip" value="{{ camera_ip }}">
     <div><label class="f">Camera IP</label><input name="camera_ip" value="{{ camera_ip }}" placeholder="192.168.1.181"></div>
     <div style="grid-column:span 2"><label class="f">Full RTSP link (advanced - *** = saved password)</label><input name="camera_link" value="{{ camera }}"></div>
-    <div><button class="btn">Save &amp; connect</button></div>
+    <div class="row"><button class="btn">Save &amp; connect</button><button class="btn ghost cam-reset" type="button" title="Back to the saved camera">Reset</button></div>
   </form>
   <p class="small" style="margin-bottom:0">Status: <span id="camStatus"><span class="dot {{ 'on' if stats.camera.connected else 'off' }}"></span>{{ 'Connected' if stats.camera.connected else 'Not connected' }} {{ stats.camera.size }}</span></p>
 </div>
 <div class="card" id="out-camera">
   <h2>OUT camera (exit)</h2>
   <p class="small muted" style="margin-top:0">Optional second camera at the exit door. When it is set, the camera above marks only <b>IN</b> and this one marks <b>OUT</b>. Leave it unset to keep one camera for both.{% if not out_set %} The boxes are pre-filled from the camera above - just change the IP to the exit camera's IP and press <b>Save &amp; connect</b>.{% endif %}</p>
-  <form method="post" action="/settings/out-camera" class="form-grid">
+  <form method="post" action="/settings/out-camera" class="form-grid cam-form" data-cam="out">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="shown_ip" value="{{ out_camera_ip }}">
     <div><label class="f">OUT camera IP</label><input name="camera_ip" value="{{ out_camera_ip }}" placeholder="e.g. 192.168.1.182"></div>
     <div style="grid-column:span 2"><label class="f">Full RTSP link (advanced - *** = saved password)</label><input name="camera_link" value="{{ out_camera }}" placeholder="rtsp://admin:password@192.168.1.182:554/stream1"></div>
-    <div class="row"><button class="btn">Save &amp; connect</button>{% if out_set %}<button class="btn ghost" name="remove" value="1">Remove</button>{% endif %}</div>
+    <div class="row"><button class="btn">Save &amp; connect</button><button class="btn ghost cam-reset" type="button" title="Back to the saved values">Reset</button>{% if out_set %}<button class="btn ghost" name="remove" value="1">Remove</button>{% endif %}</div>
   </form>
   <p class="small" style="margin-bottom:0">Status: <span id="outCamStatus">{% if not out_set %}<span class="dot off"></span>Not set - one camera marks IN and OUT{% elif stats.out_camera %}<span class="dot {{ 'on' if stats.out_camera.connected else 'off' }}"></span>{{ 'Connected' if stats.out_camera.connected else 'Not connected' }} {{ stats.out_camera.size }}{% else %}<span class="dot off"></span>Saved{% endif %}</span></p>
 </div>
@@ -70,5 +71,36 @@ async function camStatus(){
   } catch (e) {}
 }
 camStatus(); setInterval(camStatus, 3000);
+
+// camera boxes: a failed save shows what was typed again (only the mistake needs fixing),
+// Reset puts back the saved values, and the IP box and the RTSP link always match
+const HOST_RE = /^(\w+:\/\/(?:[^@\/]*@)?)([^:\/@]*)/;
+// the page opens scrolled to the camera card - show the save result there, not off-screen at the top
+const camCard = /^#(out-)?camera$/.test(location.hash) && document.querySelector(location.hash);
+if (camCard) document.querySelectorAll(".flash").forEach(m => camCard.querySelector("h2").after(m));
+document.querySelectorAll("form.cam-form").forEach(f => {
+  const ip = f.elements.camera_ip, link = f.elements.camera_link, key = "camdraft-" + f.dataset.cam;
+  const saved = {ip: ip.value, link: link.value};
+  try {
+    const d = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (d && new URLSearchParams(location.search).get("keep") === f.dataset.cam) {
+      ip.value = d.ip; link.value = d.link;
+    }
+    sessionStorage.removeItem(key);
+  } catch (e) {}
+  f.addEventListener("submit", e => {
+    if (e.submitter && e.submitter.name === "remove") return;
+    try { sessionStorage.setItem(key, JSON.stringify({ip: ip.value, link: link.value})); } catch (err) {}
+  });
+  f.querySelector(".cam-reset").addEventListener("click", () => { ip.value = saved.ip; link.value = saved.link; });
+  ip.addEventListener("input", () => {
+    const v = ip.value.trim();
+    if (/^[A-Za-z0-9.\-]+$/.test(v) && HOST_RE.test(link.value)) link.value = link.value.replace(HOST_RE, "$1" + v);
+  });
+  link.addEventListener("input", () => {
+    const m = link.value.match(HOST_RE);
+    if (m && m[2]) ip.value = m[2];
+  });
+});
 </script>
 {% endblock %}
