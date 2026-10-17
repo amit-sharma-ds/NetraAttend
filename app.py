@@ -637,10 +637,11 @@ def settings():
     off = {int(x) for x in s["weekly_off"].split(",") if x.strip().isdigit()}
     cam = engine.camera_url()
     out_cam = engine.out_camera_url()
+    shown_out = out_cam or cam   # not set yet: start from the IN camera's link - only the IP needs changing
     return render_template("settings.html", s=s, off=off, weekdays=WEEKDAYS, stats=engine.stats(),
                            camera=mask_url(cam), camera_ip=camera_host(cam), db_name=config.MONGO_DB,
-                           out_camera=mask_url(out_cam) if out_cam else "",
-                           out_camera_ip=camera_host(out_cam) if out_cam else "")
+                           out_set=bool(out_cam), out_camera=mask_url(shown_out),
+                           out_camera_ip=camera_host(shown_out))
 
 
 def camera_host(url):
@@ -718,6 +719,8 @@ def out_camera_settings():
     in_cam = str(engine.camera_url())
     ip = request.form.get("camera_ip", "").strip()
     link = request.form.get("camera_link", "").strip()
+    if ip == request.form.get("shown_ip", "").strip():
+        ip = ""    # IP box left as pre-filled: the link decides (so editing only the link works too)
     new = current
     if link and link != mask_url(current):
         # password left masked (***): keep the saved one - this camera's, else the IN camera's

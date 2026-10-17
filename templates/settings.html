@@ -14,14 +14,15 @@
 </div>
 <div class="card" id="out-camera">
   <h2>OUT camera (exit)</h2>
-  <p class="small muted" style="margin-top:0">Optional second camera at the exit door. When it is set, the camera above marks only <b>IN</b> and this one marks <b>OUT</b>. Leave it empty to keep one camera for both. Same login as the camera above? Just type its IP.</p>
+  <p class="small muted" style="margin-top:0">Optional second camera at the exit door. When it is set, the camera above marks only <b>IN</b> and this one marks <b>OUT</b>. Leave it unset to keep one camera for both.{% if not out_set %} The boxes are pre-filled from the camera above - just change the IP to the exit camera's IP and press <b>Save &amp; connect</b>.{% endif %}</p>
   <form method="post" action="/settings/out-camera" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="shown_ip" value="{{ out_camera_ip }}">
     <div><label class="f">OUT camera IP</label><input name="camera_ip" value="{{ out_camera_ip }}" placeholder="e.g. 192.168.1.182"></div>
     <div style="grid-column:span 2"><label class="f">Full RTSP link (advanced - *** = saved password)</label><input name="camera_link" value="{{ out_camera }}" placeholder="rtsp://admin:password@192.168.1.182:554/stream1"></div>
-    <div class="row"><button class="btn">Save &amp; connect</button>{% if out_camera %}<button class="btn ghost" name="remove" value="1">Remove</button>{% endif %}</div>
+    <div class="row"><button class="btn">Save &amp; connect</button>{% if out_set %}<button class="btn ghost" name="remove" value="1">Remove</button>{% endif %}</div>
   </form>
-  <p class="small" style="margin-bottom:0">Status: <span id="outCamStatus">{% if not out_camera %}<span class="dot off"></span>Not set - one camera marks IN and OUT{% elif stats.out_camera %}<span class="dot {{ 'on' if stats.out_camera.connected else 'off' }}"></span>{{ 'Connected' if stats.out_camera.connected else 'Not connected' }} {{ stats.out_camera.size }}{% else %}<span class="dot off"></span>Saved{% endif %}</span></p>
+  <p class="small" style="margin-bottom:0">Status: <span id="outCamStatus">{% if not out_set %}<span class="dot off"></span>Not set - one camera marks IN and OUT{% elif stats.out_camera %}<span class="dot {{ 'on' if stats.out_camera.connected else 'off' }}"></span>{{ 'Connected' if stats.out_camera.connected else 'Not connected' }} {{ stats.out_camera.size }}{% else %}<span class="dot off"></span>Saved{% endif %}</span></p>
 </div>
 <div class="card">
   <h2>Office timing</h2>
