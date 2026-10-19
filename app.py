@@ -1243,6 +1243,23 @@ def release_camera_on_window_close(stop):
     ctypes.windll.kernel32.SetConsoleCtrlHandler(_close_handler, True)
 
 
+def raise_priority():
+    """Task Scheduler starts the service at "below normal" CPU priority, so any other busy
+    program on this PC (e.g. another camera app) slows face detection right down and
+    people walk past unseen. Run above normal so attendance gets the CPU first."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    if kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x8000):   # ABOVE_NORMAL_PRIORITY_CLASS
+        print("CPU priority: above normal", flush=True)
+    else:
+        print(f"Could not raise CPU priority (error {ctypes.get_last_error()})", flush=True)
+
+
 def keep_awake():
     """Render's free plan sleeps after 15 min without visitors and the next visit then
     takes about a minute. Visiting our own public link every 10 min keeps it answering
@@ -1265,6 +1282,8 @@ def keep_awake():
 
 def main():
     global engine
+    if not WEB_ONLY:
+        raise_priority()
     init_db()
     engine = Engine()
     engine.start(with_camera=not WEB_ONLY)
