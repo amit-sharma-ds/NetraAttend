@@ -48,6 +48,7 @@ TRACK_EXPIRY = 1.5     # seconds a track survives without a detection
 REVERIFY_SEC = 4.0     # re-check confirmed faces this often (also refreshes "last seen")
 SLOW_RETRY_SEC = 1.5   # retry pace for faces that did not match yet
 UNKNOWN_AFTER = 6      # attempts without any match before showing "Unknown"
+UNKNOWN_SNAP_GAP = 10  # at most one unknown-face photo per camera this often (seconds)
 
 # Weaker matches (e.g. the day after shaving a beard) still count when several
 # frames in a row agree on the same person and nobody else is close.
@@ -199,6 +200,7 @@ class Track:
         self.score = 0.0
         self.mismatch = 0
         self.unknown = False
+        self.unknown_saved = False   # photo of this unknown face already taken
         self.result = None
         self.enrolling = False
 
@@ -380,6 +382,7 @@ class Engine:
         self.det_ms = 0.0
         self.rec_ms = 0.0
         self.last_face_time = 0.0
+        self.last_unknown = 0.0
         if main is None:
             self.load_gallery()
 
@@ -744,6 +747,7 @@ class Engine:
         vote = emp_id if level else None
         to_record = None
         learn = False
+        new_unknown = False
         with self.lock:
             tr.score = score
             tr.votes.append((vote, level))
@@ -766,6 +770,8 @@ class Engine:
                     to_record = best
                 else:
                     tr.unknown = tr.attempts >= UNKNOWN_AFTER and not anyv
+                    if tr.unknown and not tr.unknown_saved:
+                        tr.unknown_saved = new_unknown = True
             elif vote == tr.emp_id:
                 tr.mismatch = 0
                 to_record = vote
@@ -777,6 +783,8 @@ class Engine:
                     tr.mismatch = 0
             learn = (to_record is not None and vote == to_record and level == 2
                      and normal.get(to_record, 0) >= 2)
+        if new_unknown:
+            self._save_unknown(cand, score)
         if to_record is None:
             return
         snap = jpeg(make_snapshot(cand["frame"], cand["bbox"], height=240), 80)
@@ -807,6 +815,30 @@ class Engine:
                 self._auto_learn(to_record, cand, emb, score, margin)
             except Exception:
                 traceback.print_exc()
+
+    def _save_unknown(self, cand, score):
+        """A face nobody matched: keep a photo and list it with the recognised people on
+        the live page. Stored as unknown/<date>/<time>.jpg (deleted after PHOTO_DAYS)."""
+        now = time.monotonic()
+        if now - self.last_unknown < UNKNOWN_SNAP_GAP:
+            return
+        self.last_unknown = now
+        snap = jpeg(make_snapshot(cand["frame"], cand["bbox"], height=240), 80)
+        if snap is None:
+            return
+        when = datetime.now()
+        key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S}{'_out' if self.direction == 'out' else ''}.jpg"
+        try:
+            put_photo(key, snap, None)
+        except Exception as exc:
+            print(f"Could not save unknown face photo: {exc}", flush=True)
+            key = None
+        with self.lock:
+            self.recent.appendleft({
+                "emp_id": None, "name": "Unknown person", "code": "", "kind": "UNKNOWN",
+                "time": when.strftime("%H:%M:%S"), "status": "", "late_min": 0,
+                "score": round(score, 2), "photo": key})
+        print(f"[{when:%H:%M:%S}] Unknown person score={score:.2f}", flush=True)
 
     # ------------------------------------------------------------ enrollment
     def start_enroll(self, emp_id, name, replace=True):
