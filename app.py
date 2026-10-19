@@ -22,8 +22,9 @@ import numpy as np
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 from bson import ObjectId
+from bson.binary import Binary
 from bson.errors import InvalidId
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import config
@@ -248,18 +249,133 @@ def live():
     return render_template("live.html", has_out=bool(engine.out_camera_url()))
 
 
-def still_image(line1, line2):
+def still_jpg(line1, line2):
     img = np.full((360, 640, 3), 30, np.uint8)
     cv2.putText(img, line1, (60, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(img, line2, (100, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (170, 170, 170), 1, cv2.LINE_AA)
-    return Response(cv2.imencode(".jpg", img)[1].tobytes(), mimetype="image/jpeg")
+    return cv2.imencode(".jpg", img)[1].tobytes()
+
+
+def still_image(line1, line2):
+    return Response(still_jpg(line1, line2), mimetype="image/jpeg")
+
+
+# The cloud server cannot reach the office camera. While a live view is open there it
+# asks the office PC for it through MongoDB (collection "live"), and the office PC
+# writes its newest frames and camera status there until nobody is watching.
+LIVE_FPS = 2          # frames per second sent to the cloud
+LIVE_WIDTH = 640      # smaller than on the LAN: every frame goes over the internet twice
+_live_asked = 0.0
+
+
+def live_fresh(seconds):
+    """Filter: written in the last few seconds, by the database's clock (the office
+    PC's and the cloud server's clocks never have to agree)."""
+    return {"$expr": {"$gt": ["$at", {"$subtract": ["$$NOW", int(seconds * 1000)]}]}}
+
+
+def live_put(key, **values):
+    values = {k: {"$literal": v} for k, v in values.items()}
+    db().live.update_one({"_id": key}, [{"$set": dict(values, at="$$NOW")}], upsert=True)
+
+
+def live_ask():
+    """Cloud: tell the office PC that someone is watching (a write every 5 s is enough)."""
+    global _live_asked
+    if time.monotonic() - _live_asked > 5:
+        _live_asked = time.monotonic()
+        live_put("watch")
+
+
+def live_stats():
+    """Camera status and recognitions; on the cloud server they come from the office PC."""
+    if not WEB_ONLY:
+        return engine.stats()
+    try:
+        live_ask()
+        doc = db().live.find_one(dict({"_id": "status"}, **live_fresh(10)))
+    except PyMongoError:
+        doc = None
+    return doc["stats"] if doc else engine.stats()
+
+
+def cloud_frames(key):
+    """Cloud: the office PC's live view as an MJPEG stream."""
+    seq, last_new, last_sent = None, time.monotonic(), 0.0
+    jpg = still_jpg("Connecting to the office PC...", "Live view comes from there")
+    while True:
+        if jpg is not None:
+            last_sent = time.monotonic()
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                   + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
+        time.sleep(0.5 / LIVE_FPS)
+        jpg = None
+        try:
+            live_ask()
+            doc = db().live.find_one(dict({"_id": key, "seq": {"$ne": seq}}, **live_fresh(10)))
+        except PyMongoError:
+            doc = None
+        now = time.monotonic()
+        if doc is not None:
+            seq, last_new, jpg = doc["seq"], now, bytes(doc["jpg"])
+        elif now - last_new > 15 and now - last_sent > 2:
+            jpg = still_jpg("Office PC is not sending video", "Check that it is on and online")
+
+
+def live_sender():
+    """Office PC: while a live view is open on the cloud server, send it the live view
+    and the camera status through MongoDB."""
+    def shrink(jpg):
+        img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return jpg
+        if img.shape[1] > LIVE_WIDTH:
+            img = cv2.resize(img, (LIVE_WIDTH, img.shape[0] * LIVE_WIDTH // img.shape[1]),
+                             interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        return buf.tobytes() if ok else jpg
+
+    def loop():
+        sent = {}
+        watched, last_check, last_stats = False, 0.0, 0.0
+        while True:
+            time.sleep(1.0 / LIVE_FPS)
+            try:
+                now = time.monotonic()
+                if now - last_check >= 3:
+                    last_check = now
+                    watched = db().live.find_one(dict({"_id": "watch"}, **live_fresh(15)),
+                                                 {"_id": 1}) is not None
+                if not watched:
+                    sent.clear()
+                    continue
+                if now - last_stats >= 2:
+                    last_stats = now
+                    live_put("status", stats=engine.stats())
+                for key, eng in (("frame_in", engine), ("frame_out", engine.out)):
+                    if eng is None:
+                        continue
+                    eng.streamer.last_client = now    # keep its live view rendering
+                    with eng.streamer.cond:
+                        jpg, seq = eng.streamer.jpg, eng.streamer.seq
+                    # skip the frame that was there before watching started (may be old)
+                    if jpg is None or sent.setdefault(key, seq) == seq:
+                        continue
+                    sent[key] = seq
+                    live_put(key, jpg=Binary(shrink(jpg)), seq=seq)
+            except Exception as exc:
+                print(f"Live view for the cloud: {exc}", flush=True)
+                time.sleep(10)
+
+    threading.Thread(target=loop, name="live-to-cloud", daemon=True).start()
 
 
 @app.route("/video_feed")
 @admin_required
 def video_feed():
-    if WEB_ONLY:   # the camera is on the office network, not reachable from the cloud
-        return still_image("Live camera is on the office PC", "Open the office link to watch it")
+    if WEB_ONLY:   # the camera is on the office network; the office PC sends its view
+        return Response(cloud_frames("frame_in"), mimetype="multipart/x-mixed-replace; boundary=frame",
+                        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
     return Response(engine.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
                     headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
@@ -269,7 +385,8 @@ def video_feed():
 def video_feed_out():
     out = engine.out
     if WEB_ONLY:
-        return still_image("Live camera is on the office PC", "Open the office link to watch it")
+        return Response(cloud_frames("frame_out"), mimetype="multipart/x-mixed-replace; boundary=frame",
+                        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
     if out is None:
         return still_image("No OUT camera", "Add one in Settings")
     return Response(out.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
@@ -280,14 +397,14 @@ def video_feed_out():
 @admin_required
 def api_today():
     data = att.today_overview()
-    data["engine"] = engine.stats()
+    data["engine"] = live_stats()
     return jsonify(data)
 
 
 @app.route("/api/status")
 @admin_required
 def api_status():
-    return jsonify(engine.stats())
+    return jsonify(live_stats())
 
 
 @app.route("/attendance/manual", methods=["POST"])
@@ -1139,6 +1256,8 @@ def main():
     release_camera_on_window_close(engine.stop)
     if WEB_ONLY:
         print("Role: web (cloud) - website + API, camera handled by the office PC", flush=True)
+    else:
+        live_sender()
     keep_awake()
     from waitress import serve
     print(f"NetraAttend running: http://127.0.0.1:{config.PORT}  (LAN: http://<this-pc-ip>:{config.PORT})",
