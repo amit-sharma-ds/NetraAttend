@@ -48,7 +48,8 @@ TRACK_EXPIRY = 1.5     # seconds a track survives without a detection
 REVERIFY_SEC = 4.0     # re-check confirmed faces this often (also refreshes "last seen")
 SLOW_RETRY_SEC = 1.5   # retry pace for faces that did not match yet
 UNKNOWN_AFTER = 6      # attempts without any match before showing "Unknown"
-UNKNOWN_SNAP_GAP = 10  # at most one unknown-face photo per camera this often (seconds)
+UNKNOWN_SNAP_GAP = 5   # at most one unknown-face photo per camera this often (seconds)
+UNKNOWN_MIN_HITS = 2   # a face seen this often (close enough) that leaves never recognised is unknown
 
 # Weaker matches (e.g. the day after shaving a beard) still count when several
 # frames in a row agree on the same person and nobody else is close.
@@ -201,6 +202,10 @@ class Track:
         self.mismatch = 0
         self.unknown = False
         self.unknown_saved = False   # photo of this unknown face already taken
+        self.identified = False      # recognised at least once
+        self.close_hits = 0          # detections big enough to recognise
+        self.snap = None             # biggest such view: the photo if it stays unknown
+        self.snap_w = 0.0
         self.result = None
         self.enrolling = False
 
@@ -591,12 +596,22 @@ class Engine:
             self.last_face_time = now
 
         with self.lock:
+            # people who left without ever being recognised (face covered by a hand,
+            # turned away, or walked past too quickly) are kept as unknown too
+            left = [tr for tr in self.tracks.values() if now - tr.last_seen > TRACK_EXPIRY
+                    and tr.close_hits >= UNKNOWN_MIN_HITS and self._claim_unknown(tr, now)]
+            if left:
+                self.last_unknown = now
             tracks = self._assign(faces, now)
             enroll = self.enroll
             target = self._enroll_target(faces, enroll) if enroll else None
             overlay = []
             for i, (face, tr) in enumerate(zip(faces, tracks)):
                 tr.enrolling = target == i
+                if face.width >= config.MIN_FACE_PX and not tr.enrolling and not tr.identified:
+                    tr.close_hits += 1
+                    if face.width > tr.snap_w:
+                        tr.snap, tr.snap_w = make_snapshot(frame, face.bbox, height=240), face.width
                 yaw, pitch = face.pose()
                 if (face.width >= config.MIN_FACE_PX and face.score >= 0.55
                         and abs(yaw) <= config.MAX_YAW):
@@ -615,6 +630,8 @@ class Engine:
                 overlay.append((face.bbox.copy(), *self._label(tr, face, enroll)))
             self.overlay = overlay
             self.overlay_ts = now
+        for tr in left:   # saving goes over the network: keep detection running meanwhile
+            threading.Thread(target=self._save_unknown, args=(tr.snap, tr.score), daemon=True).start()
         self.work.set()
 
     def _assign(self, faces, now):
@@ -767,11 +784,13 @@ class Engine:
                 if best is not None:
                     tr.emp_id, tr.name = best, self.gallery.name(best)
                     tr.unknown, tr.mismatch = False, 0
+                    tr.identified = True
                     to_record = best
                 else:
                     tr.unknown = tr.attempts >= UNKNOWN_AFTER and not anyv
-                    if tr.unknown and not tr.unknown_saved:
-                        tr.unknown_saved = new_unknown = True
+                    if tr.unknown and self._claim_unknown(tr, time.monotonic()):
+                        self.last_unknown = time.monotonic()
+                        new_unknown = True
             elif vote == tr.emp_id:
                 tr.mismatch = 0
                 to_record = vote
@@ -784,7 +803,7 @@ class Engine:
             learn = (to_record is not None and vote == to_record and level == 2
                      and normal.get(to_record, 0) >= 2)
         if new_unknown:
-            self._save_unknown(cand, score)
+            self._save_unknown(make_snapshot(cand["frame"], cand["bbox"], height=240), score)
         if to_record is None:
             return
         snap = jpeg(make_snapshot(cand["frame"], cand["bbox"], height=240), 80)
@@ -816,18 +835,23 @@ class Engine:
             except Exception:
                 traceback.print_exc()
 
-    def _save_unknown(self, cand, score):
-        """A face nobody matched: keep a photo and list it with the recognised people on
-        the live page. Stored as unknown/<date>/<time>.jpg (deleted after PHOTO_DAYS)."""
-        now = time.monotonic()
-        if now - self.last_unknown < UNKNOWN_SNAP_GAP:
-            return
-        self.last_unknown = now
-        snap = jpeg(make_snapshot(cand["frame"], cand["bbox"], height=240), 80)
+    def _claim_unknown(self, tr, now):
+        """Caller holds self.lock. True once per track when its unknown photo may be taken
+        (never for someone recognised; the caller then sets last_unknown)."""
+        if tr.unknown_saved or tr.identified or now - self.last_unknown < UNKNOWN_SNAP_GAP:
+            return False
+        tr.unknown_saved = True
+        return True
+
+    def _save_unknown(self, img, score):
+        """Photo of someone the camera could not recognise (new visitor, covered face):
+        stored as unknown/<date>/<time>.jpg (deleted after PHOTO_DAYS like attendance
+        photos), shown on the Unknown page and in the live page's list."""
+        snap = jpeg(img, 80)
         if snap is None:
             return
         when = datetime.now()
-        key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S}{'_out' if self.direction == 'out' else ''}.jpg"
+        key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S%f}"[:-3] + ("_out" if self.direction == "out" else "") + ".jpg"
         try:
             put_photo(key, snap, None)
         except Exception as exc:

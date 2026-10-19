@@ -679,6 +679,24 @@ def photos_page():
                            size_kb=round(stats["size"] / 1024), keep_days=config.PHOTO_DAYS)
 
 
+@app.route("/unknown")
+@admin_required
+def unknown_page():
+    """Photos of people the camera could not recognise (new visitors, covered faces),
+    stored by the engine as unknown/<date>/<HHMMSSmmm>[_out].jpg."""
+    day = parse_day(request.args.get("date"), date.today()).isoformat()
+    d = db()
+    items = []
+    for p in d.photos.find({"_id": {"$regex": f"^unknown/{day}/"}}, {"_id": 1}).sort("_id", -1):
+        name = p["_id"].rsplit("/", 1)[1][:-4]
+        items.append({"photo": p["_id"], "time": f"{name[:2]}:{name[2:4]}:{name[4:6]}",
+                      "out": name.endswith("_out")})
+    days = sorted({p["_id"][8:18] for p in d.photos.find({"_id": {"$regex": "^unknown/"}}, {"_id": 1})},
+                  reverse=True)[:30]
+    return render_template("unknown.html", day=day, items=items, days=days,
+                           has_out=bool(engine.out_camera_url()), keep_days=config.PHOTO_DAYS)
+
+
 @app.route("/snap/<path:rel>")
 def snapshot(rel):
     if not session.get("admin") or admin_blocked():
