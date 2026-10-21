@@ -9,6 +9,16 @@
     <button class="btn">Show</button>
   </form>
 </div>
+{% if capture_on is defined %}
+<form method="post" action="/unknown/switch" class="card row mb" style="align-items:center;justify-content:space-between">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="date" value="{{ day }}">
+  <input type="hidden" name="on" value="{{ '0' if capture_on else '1' }}">
+  <div><b>Unknown detection</b> <span class="badge {{ 'b-on-time' if capture_on else 'b-absent' }}">{{ 'ON' if capture_on else 'OFF' }}</span>
+    <div class="small muted">{{ 'Photos of unknown people are being saved from both cameras.' if capture_on else 'Off: no new unknown photos are saved. Recognition and attendance keep working.' }}</div></div>
+  <button class="btn {{ 'danger' if capture_on else '' }}">{{ 'Turn OFF' if capture_on else 'Turn ON' }}</button>
+</form>
+{% endif %}
 {% if days %}<div class="chips mb">{% for d in days %}<a class="chip" href="{{ url_for('unknown_page', date=d) }}" {% if d == day %}style="border-color:var(--brand);color:var(--brand)"{% endif %}>{{ d }}</a>{% endfor %}</div>{% endif %}
 <div class="card">
   {% if items %}

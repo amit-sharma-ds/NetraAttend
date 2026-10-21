@@ -102,6 +102,13 @@ def pose_hint(step, yaw, pitch):
     return ""
 
 
+def unknown_capture_on():
+    """Unknown-person photos can be switched off and on from the Unknown page (setting
+    "unknown_capture", on by default). Settings are cached 10 s, so the cameras follow
+    a switch within about 10 seconds, also when it is made on the cloud site."""
+    return str(get_settings().get("unknown_capture", "1")) != "0"
+
+
 def make_snapshot(frame, bbox, height=300):
     """Face with some context (head + shoulders) for evidence photos."""
     H, W = frame.shape[:2]
@@ -434,6 +441,9 @@ class Engine:
                 if not getattr(self, "with_camera", True):
                     self.load_gallery(reset_tracks=False)   # faces registered on the office PC
                 else:
+                    if self._faces_version() != self.faces_version:
+                        print("Faces or employees changed on another PC - reloading", flush=True)
+                        self.load_gallery(reset_tracks=False)
                     if str(self.camera_url()) != str(self.camera.source):
                         print("Camera link changed in Settings - switching", flush=True)
                         self.set_camera(self.camera_url())
@@ -492,7 +502,18 @@ class Engine:
                 tr.result = None
 
     # ------------------------------------------------------------ gallery
+    @staticmethod
+    def _faces_version():
+        """Small fingerprint of the registered faces and employees, to notice changes made
+        on another PC (e.g. photos uploaded on the cloud site) without re-reading them all."""
+        d = db()
+        newest = d.face_samples.find_one({}, {"_id": 1}, sort=[("_id", -1)])
+        emps = sorted((e["_id"], e.get("name"), e.get("emp_code"), e.get("active"))
+                      for e in d.employees.find({}, {"name": 1, "emp_code": 1, "active": 1}))
+        return d.face_samples.count_documents({}), newest and newest["_id"], str(emps)
+
     def load_gallery(self, reset_tracks=True):
+        self.faces_version = self._faces_version()
         d = db()
         stale = list(d.face_samples.find({"model": {"$ne": config.REC_MODEL}}, {"crop": 1}))
         if stale:
@@ -595,10 +616,11 @@ class Engine:
         if faces:
             self.last_face_time = now
 
+        unknown_on = unknown_capture_on()
         with self.lock:
             # people who left without ever being recognised (face covered by a hand,
             # turned away, or walked past too quickly) are kept as unknown too
-            left = [tr for tr in self.tracks.values() if now - tr.last_seen > TRACK_EXPIRY
+            left = [tr for tr in self.tracks.values() if unknown_on and now - tr.last_seen > TRACK_EXPIRY
                     and tr.close_hits >= UNKNOWN_MIN_HITS and self._claim_unknown(tr, now)]
             if left:
                 self.last_unknown = now
@@ -765,6 +787,7 @@ class Engine:
         to_record = None
         learn = False
         new_unknown = False
+        unknown_on = unknown_capture_on()
         with self.lock:
             tr.score = score
             tr.votes.append((vote, level))
@@ -788,7 +811,7 @@ class Engine:
                     to_record = best
                 else:
                     tr.unknown = tr.attempts >= UNKNOWN_AFTER and not anyv
-                    if tr.unknown and self._claim_unknown(tr, time.monotonic()):
+                    if tr.unknown and unknown_on and self._claim_unknown(tr, time.monotonic()):
                         self.last_unknown = time.monotonic()
                         new_unknown = True
             elif vote == tr.emp_id:

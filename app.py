@@ -36,7 +36,7 @@ apply_env_overrides()
 import api  # noqa: E402
 import attendance as att  # noqa: E402
 from camera import mask_url  # noqa: E402
-from engine import POSES, Engine  # noqa: E402
+from engine import POSES, Engine, unknown_capture_on  # noqa: E402
 
 # ROLE "all" = office PC (camera + website + API); "web" = cloud server (website + API,
 # no camera). Both use the same MongoDB.
@@ -266,6 +266,7 @@ def still_image(line1, line2):
 LIVE_FPS = 2          # frames per second sent to the cloud
 LIVE_WIDTH = 640      # smaller than on the LAN: every frame goes over the internet twice
 _live_asked = 0.0
+_enroll_lock = threading.Lock()
 
 
 def live_fresh(seconds):
@@ -324,7 +325,7 @@ def cloud_frames(key):
 
 def live_sender():
     """Office PC: while a live view is open on the cloud server, send it the live view
-    and the camera status through MongoDB."""
+    and the camera status through MongoDB, and run its camera-registration commands."""
     def shrink(jpg):
         img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
@@ -335,8 +336,25 @@ def live_sender():
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
         return buf.tobytes() if ok else jpg
 
+    def relay_enroll(state):
+        """Camera registration from the cloud site: run its commands here and send back
+        the progress while a registration runs (and once more when it ends). The
+        progress goes out before the answer, so the page finds it running."""
+        doc = db().live.find_one(dict({"_id": "enroll_cmd", "n": {"$ne": state["n"]}}, **live_fresh(15)))
+        result = None
+        if doc is not None:
+            state["n"] = doc["n"]
+            result = enroll_command(doc["cmd"], doc.get("emp_id"), doc.get("replace", True))
+        status = engine.enroll_status()
+        if status["active"] or state["active"] or result is not None:
+            live_put("enroll_status", status=status)
+        state["active"] = status["active"]
+        if result is not None:
+            live_put("enroll_result", n=doc["n"], result=result)
+
     def loop():
         sent = {}
+        enroll_state = {"n": None, "active": False}
         watched, last_check, last_stats = False, 0.0, 0.0
         while True:
             time.sleep(1.0 / LIVE_FPS)
@@ -349,6 +367,7 @@ def live_sender():
                 if not watched:
                     sent.clear()
                     continue
+                relay_enroll(enroll_state)
                 if now - last_stats >= 2:
                     last_stats = now
                     live_put("status", stats=engine.stats())
@@ -567,51 +586,94 @@ def face_image(sample_id):
                     headers={"Cache-Control": "private, max-age=86400"})
 
 
+def enroll_command(cmd, emp_id=None, replace=True):
+    """Camera registration (start / skip / cancel / save). It runs where the camera is:
+    the cloud server passes the command to the office PC (see office_enroll)."""
+    if WEB_ONLY:
+        return office_enroll(cmd, emp_id, replace)
+    if cmd == "start":
+        emp = get_employee(emp_id)
+        if emp is None:
+            return {"ok": False, "msg": "Employee not found"}
+        engine.start_enroll(emp_id, emp["name"], replace)
+        return {"ok": True}
+    if cmd == "skip":
+        engine.skip_enroll_step()
+        return {"ok": True}
+    if cmd == "cancel":
+        engine.cancel_enroll()
+        return {"ok": True}
+    if cmd == "save":
+        status = engine.enroll_status()
+        if not status.get("active") or status.get("emp_id") != emp_id:
+            return {"ok": False, "msg": "No capture running for this employee."}
+        if not status.get("can_save"):
+            return {"ok": False, "msg": "Not enough face samples yet - keep following the instructions."}
+        samples, replace = engine.finish_enroll(emp_id)
+        ok, msg = engine.save_samples(emp_id, samples, "cctv", replace)
+        return {"ok": ok, "msg": msg}
+    return {"ok": False, "msg": f"Unknown command {cmd!r}"}
+
+
+def office_enroll(cmd, emp_id, replace):
+    """Cloud: run a camera-registration command on the office PC through MongoDB and
+    wait for its answer (live_sender picks it up while someone is watching)."""
+    n = secrets.token_hex(8)
+    try:
+        # one command at a time: the office PC reads one waiting command per check
+        with _enroll_lock:
+            live_ask()
+            live_put("enroll_cmd", cmd=cmd, emp_id=emp_id, replace=replace, n=n)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                time.sleep(0.3)
+                doc = db().live.find_one({"_id": "enroll_result", "n": n})
+                if doc is not None:
+                    return doc["result"]
+    except PyMongoError:
+        return {"ok": False, "msg": "Database not reachable - try again."}
+    return {"ok": False, "msg": "The office PC did not answer - check that it is on and online, "
+                               "or register with photo upload (Option 2)."}
+
+
 @app.route("/api/enroll/<int:emp_id>/start", methods=["POST"])
 @admin_required
 def enroll_start(emp_id):
-    emp = get_employee(emp_id)
-    if emp is None:
+    if get_employee(emp_id) is None:
         return jsonify(ok=False, msg="Employee not found"), 404
-    if WEB_ONLY:
-        return jsonify(ok=False, msg="Camera registration works on the office PC's website. "
-                                     "Here you can register with photo upload (Option 2).")
     replace = bool((request.get_json(silent=True) or {}).get("replace", True))
-    engine.start_enroll(emp_id, emp["name"], replace)
-    return jsonify(ok=True)
+    return jsonify(enroll_command("start", emp_id, replace))
 
 
 @app.route("/api/enroll/status")
 @admin_required
 def enroll_status():
+    if WEB_ONLY:   # progress of a registration running on the office PC
+        try:
+            live_ask()
+            doc = db().live.find_one(dict({"_id": "enroll_status"}, **live_fresh(10)))
+        except PyMongoError:
+            doc = None
+        return jsonify(doc["status"] if doc else {"active": False})
     return jsonify(engine.enroll_status())
 
 
 @app.route("/api/enroll/skip", methods=["POST"])
 @admin_required
 def enroll_skip():
-    engine.skip_enroll_step()
-    return jsonify(ok=True)
+    return jsonify(enroll_command("skip"))
 
 
 @app.route("/api/enroll/cancel", methods=["POST"])
 @admin_required
 def enroll_cancel():
-    engine.cancel_enroll()
-    return jsonify(ok=True)
+    return jsonify(enroll_command("cancel"))
 
 
 @app.route("/api/enroll/<int:emp_id>/save", methods=["POST"])
 @admin_required
 def enroll_save(emp_id):
-    status = engine.enroll_status()
-    if not status.get("active") or status.get("emp_id") != emp_id:
-        return jsonify(ok=False, msg="No capture running for this employee.")
-    if not status.get("can_save"):
-        return jsonify(ok=False, msg="Not enough face samples yet - keep following the instructions.")
-    samples, replace = engine.finish_enroll(emp_id)
-    ok, msg = engine.save_samples(emp_id, samples, "cctv", replace)
-    return jsonify(ok=ok, msg=msg)
+    return jsonify(enroll_command("save", emp_id))
 
 
 @app.route("/api/enroll/<int:emp_id>/upload", methods=["POST"])
@@ -694,7 +756,19 @@ def unknown_page():
     days = sorted({p["_id"][8:18] for p in d.photos.find({"_id": {"$regex": "^unknown/"}}, {"_id": 1})},
                   reverse=True)[:30]
     return render_template("unknown.html", day=day, items=items, days=days,
-                           has_out=bool(engine.out_camera_url()), keep_days=config.PHOTO_DAYS)
+                           has_out=bool(engine.out_camera_url()), keep_days=config.PHOTO_DAYS,
+                           capture_on=unknown_capture_on())
+
+
+@app.route("/unknown/switch", methods=["POST"])
+@admin_required
+def unknown_switch():
+    """Turn unknown-person photos on or off (both cameras, office PC and cloud site)."""
+    on = request.form.get("on") == "1"
+    save_settings({"unknown_capture": "1" if on else "0"})
+    flash(f"Unknown detection turned {'ON' if on else 'OFF'}. The cameras follow within about "
+          f"10 seconds.", "success")
+    return redirect(url_for("unknown_page", date=request.form.get("date") or None))
 
 
 @app.route("/snap/<path:rel>")

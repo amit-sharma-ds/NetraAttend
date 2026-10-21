@@ -71,12 +71,16 @@ async function start(){
   if (!timer) timer = setInterval(poll, 700);
   poll();
 }
+let saving = false;
 async function save(){
+  if (saving) return;   // a status check already on its way may ask to save again
+  saving = true;
   clearInterval(timer); timer = null; setButtons(false, false);
   instr.textContent = "Saving...";
   const r = await postJSON(`/api/enroll/${EMP}/save`);
   instr.textContent = r.ok ? "Done!" : "Not saved";
   result.innerHTML = `<span class="badge ${r.ok ? "b-on-time" : "b-absent"}">${esc(r.msg)}</span>`;
+  saving = false;
 }
 async function skip(){ await postJSON("/api/enroll/skip"); poll(); }
 async function cancel(){ await postJSON("/api/enroll/cancel"); clearInterval(timer); timer = null; setButtons(false, false); instr.textContent = "Cancelled"; }
