@@ -1,4 +1,4 @@
-# NetraAttend – CCTV Face Recognition Attendanc
+# NetraAttend – CCTV Face Recognition Attendance
 
 Real-time face recognition and automatic attendance from a CCTV camera (RTSP).
 The website has a dashboard, live camera, employees, reports (Excel) and settings.
