@@ -19,7 +19,11 @@
   <div class="card"><div class="card-head"><h3>Recent activity</h3></div><ul class="feed" id="feed"></ul></div>
 </div>
 <div class="card">
-  <div class="card-head"><h3>Today's attendance</h3><button class="btn ghost sm" onclick="document.getElementById('manual').showModal()">+ Manual entry</button></div>
+  <div class="card-head"><h3>Today's attendance</h3>
+    <div class="row" style="gap:8px">
+      {% if has_history is defined %}<input type="search" id="q" placeholder="Search name or ID" oninput="render()" style="width:200px">{% endif %}
+      <button class="btn ghost sm" onclick="document.getElementById('manual').showModal()">+ Manual entry</button></div></div>
+  {% if has_history is defined %}<p class="small muted" style="margin:-6px 0 8px">Click an employee to see their IN / OUT history.</p>{% endif %}
   <div class="table-wrap"><table class="table">
     <thead><tr><th>Employee</th><th>In</th><th>Last out</th><th>Hours</th><th>Status</th><th>Movements (click for photo)</th></tr></thead>
     <tbody id="rows"></tbody></table></div>
@@ -39,12 +43,65 @@
     <div class="row"><button class="btn">Save</button><button class="btn ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button></div>
   </form>
 </dialog>
+{% if has_history is defined %}
+<dialog id="hist" style="width:min(920px, calc(100vw - 32px))">
+  <div class="card-head" style="margin-bottom:8px">
+    <div class="who"><img class="avatar" id="hAvatar" alt=""><div><b id="hName"></b><span class="small muted" id="hCode"></span></div></div>
+    <div class="row" style="gap:6px">
+      <input type="date" id="hFrom" style="width:auto"> <span class="muted">to</span> <input type="date" id="hTo" style="width:auto">
+      <button class="btn sm" type="button" onclick="loadHist()">Show</button>
+      <button class="btn ghost sm" type="button" onclick="hist.close()">Close</button></div>
+  </div>
+  <div class="chips mb" id="hSum"></div>
+  <div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table">
+    <thead><tr><th>Date</th><th>In</th><th>Last out</th><th>Hours</th><th>Status</th><th>Movements (click for photo)</th></tr></thead>
+    <tbody id="hRows"></tbody></table></div>
+</dialog>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script>
 function moves(list){
   return (list || []).map(m => `<span class="badge b-${m.kind.toLowerCase()}" style="cursor:${m.photo ? "zoom-in" : "default"};margin:1px"
     ${m.photo ? `onclick="zoom('/snap/${m.photo}')"` : ""}>${m.kind} ${m.time}${m.field ? " · field" : ""}</span>`).join(" ") || "-";
+}
+const HIST = {{ 'true' if has_history is defined else 'false' }};   // employee history + search
+let lastRows = [], todayStr = "", histEmp = null;
+function render(){
+  const q = HIST ? document.getElementById("q").value.trim().toLowerCase() : "";
+  const list = lastRows.filter(r => !q || r.name.toLowerCase().includes(q) || String(r.code).toLowerCase().includes(q));
+  const who = r => `<img class="avatar" src="/photo/${r.emp_id}" alt=""><div><b>${esc(r.name)}</b><span class="small muted">${esc(r.code)}</span></div>`;
+  rows.innerHTML = list.map(r => `<tr>
+    <td>${HIST ? `<a href="#" class="who" style="color:inherit;text-decoration:none" title="Show IN / OUT history" onclick="openHist(${r.emp_id});return false">${who(r)}</a>` : `<div class="who">${who(r)}</div>`}</td>
+    <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
+    <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}</td>
+    <td>${moves(r.moves)}</td></tr>`).join("")
+    || (q ? `<tr><td colspan="6" class="empty">No employee matches "${esc(q)}".</td></tr>`
+          : '<tr><td colspan="6" class="empty">No employees yet - add them on the Employees page.</td></tr>');
+}
+function shiftDay(iso, days){ const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); }
+function openHist(id){
+  if (histEmp !== id) { hTo.value = todayStr; hFrom.value = shiftDay(todayStr, -29); }
+  histEmp = id;
+  hRows.innerHTML = '<tr><td colspan="6" class="empty">Loading...</td></tr>';
+  hist.showModal();
+  loadHist();
+}
+async function loadHist(){
+  let h; try { h = await (await fetch(`/api/employee/${histEmp}/history?start=${hFrom.value}&end=${hTo.value}`)).json(); } catch(e) { h = null; }
+  if (!h || !h.ok) { hRows.innerHTML = `<tr><td colspan="6" class="empty">${esc((h && h.msg) || "Could not load the history - try again.")}</td></tr>`; return; }
+  hAvatar.src = `/photo/${h.emp_id}`; hName.textContent = h.name; hCode.textContent = h.code;
+  hFrom.value = h.start; hTo.value = h.end;
+  const s = h.summary;
+  hSum.innerHTML = [["Present", s.present], ["On time", s.on_time], ["Late", s.late + (s.late_min ? ` (${s.late_min}m)` : "")],
+    ["Half day", s.half_day], ["Absent", s.absent], ["Leave", s.leave], ["Hours", s.hours]]
+    .map(([k, v]) => `<span class="chip">${k} <b>${v ?? 0}</b></span>`).join("");
+  hRows.innerHTML = h.rows.map(r => `<tr>
+    <td class="num" style="white-space:nowrap"><b>${r.weekday}</b> ${r.date}</td>
+    <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
+    <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}${r.leave ? `<span class="tag">${esc(r.leave)}</span>` : ""}</td>
+    <td>${moves(r.moves)}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="empty">No attendance in these dates.</td></tr>';
 }
 async function refresh(){
   let d; try { d = await (await fetch("/api/today")).json(); } catch(e) { return; }
@@ -56,12 +113,8 @@ async function refresh(){
   const c = d.counts;
   cTotal.textContent = c.total; cPresent.textContent = c.present; cOnTime.textContent = c.on_time;
   cLate.textContent = c.late; cHalf.textContent = c.half_day; cNotIn.textContent = c.not_in;
-  rows.innerHTML = d.rows.map(r => `<tr>
-    <td><div class="who"><img class="avatar" src="/photo/${r.emp_id}" alt=""><div><b>${esc(r.name)}</b><span class="small muted">${esc(r.code)}</span></div></div></td>
-    <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
-    <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}</td>
-    <td>${moves(r.moves)}</td></tr>`).join("")
-    || '<tr><td colspan="6" class="empty">No employees yet - add them on the Employees page.</td></tr>';
+  lastRows = d.rows; todayStr = d.date;
+  render();
   feed.innerHTML = d.events.map(e => `<li>${e.photo ? `<img class="thumb" src="/snap/${e.photo}" onclick="zoom(this.src)" alt="">` : ""}
     <div class="meta"><b>${esc(e.name)}</b><span class="badge b-${e.kind.toLowerCase()}">${e.kind === "IN" ? "Check-in" : "Out"}</span></div><time>${e.time}</time></li>`).join("")
     || '<li class="muted">No activity yet today.</li>';

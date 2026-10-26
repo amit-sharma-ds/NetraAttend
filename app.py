@@ -240,7 +240,7 @@ def dashboard():
     if not session.get("admin"):
         return redirect(url_for("login"))
     return render_template("dashboard.html", emps=att.employees({"active": True}),
-                           today=date.today().isoformat())
+                           today=date.today().isoformat(), has_history=True)
 
 
 @app.route("/live")
@@ -418,6 +418,28 @@ def api_today():
     data = att.today_overview()
     data["engine"] = live_stats()
     return jsonify(data)
+
+
+@app.route("/api/employee/<int:emp_id>/history")
+@admin_required
+def api_employee_history(emp_id):
+    """Dashboard: one employee's day-by-day IN / OUT history, same rules as Reports
+    (default the last 30 days, at most 93 days at once)."""
+    emp = get_employee(emp_id)
+    if emp is None:
+        return jsonify(ok=False, msg="Employee not found"), 404
+    end = parse_day(request.args.get("end"), date.today())
+    start = parse_day(request.args.get("start"), end - timedelta(days=29))
+    if end < start:
+        start, end = end, start
+    start = max(start, end - timedelta(days=92))
+    rows, summary = att.build_report(start, end, emp_id)
+    keys = ("date", "weekday", "check_in", "check_out", "hours", "status", "late_min", "leave",
+            "source", "note", "moves")
+    return jsonify(ok=True, emp_id=emp_id, name=emp["name"], code=emp["emp_code"],
+                   start=start.isoformat(), end=end.isoformat(),
+                   summary=summary[0] if summary else {},
+                   rows=[{k: r.get(k) for k in keys} for r in rows])
 
 
 @app.route("/api/status")
