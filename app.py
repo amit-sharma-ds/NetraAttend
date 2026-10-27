@@ -119,7 +119,7 @@ def inject():
             pending = 0
     return {"company": get_settings()["company_name"], "is_admin": bool(session.get("admin")),
             "emp_name": session.get("emp_name"), "endpoint": request.endpoint,
-            "pending_requests": pending}
+            "pending_requests": pending, "pwa": True}
 
 
 def client_ip():
@@ -230,6 +230,30 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+# ------------------------------------------------------------------ install as an app (PWA)
+@app.route("/manifest.webmanifest")
+def pwa_manifest():
+    icon = lambda name: url_for("static", filename=f"icons/{name}")
+    resp = jsonify({
+        "id": "/", "name": "NetraAttend", "short_name": "NetraAttend",
+        "description": "Face recognition attendance", "start_url": "/", "scope": "/",
+        "display": "standalone", "background_color": "#0f172a", "theme_color": "#4f46e5",
+        "icons": [{"src": icon("icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                  {"src": icon("icon-512.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                  {"src": icon("icon-maskable-512.png"), "sizes": "512x512", "type": "image/png",
+                   "purpose": "maskable"}]})
+    resp.mimetype = "application/manifest+json"
+    return resp
+
+
+@app.route("/sw.js")
+def pwa_service_worker():
+    # served from the site root so it covers every page (scope "/")
+    resp = send_file(os.path.join(app.static_folder, "sw.js"), mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 # ------------------------------------------------------------------ dashboard & live

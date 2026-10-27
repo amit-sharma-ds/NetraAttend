@@ -6,6 +6,7 @@
 <title>{% block title %}{{ company }}{% endblock %} · NetraAttend</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234f46e5'/%3E%3Ccircle cx='12' cy='12' r='4' fill='white'/%3E%3C/svg%3E">
+{% include "_pwa_head.html" %}
 </head>
 <body>
 <div class="shell">
@@ -30,6 +31,7 @@
       {% endif %}
       <a href="{{ url_for('logout') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>Logout</span></a>
     </nav>
+    {% with style="margin:10px 10px 0" %}{% include "_pwa_install.html" %}{% endwith %}
     <div class="foot">{{ 'Admin' if is_admin else emp_name }}</div>
   </aside>
   <main class="main">

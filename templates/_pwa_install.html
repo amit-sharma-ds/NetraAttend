@@ -1,0 +1,20 @@
+{# "Install app" button: appears only when the browser offers to install (Chrome / Edge) #}
+{% if pwa is defined %}
+<button type="button" class="btn ghost sm" id="pwaInstall" style="display:none;{{ style|default('') }}">Install app</button>
+<script>
+(() => {
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  const btn = document.getElementById("pwaInstall");
+  let offer = null;
+  window.addEventListener("beforeinstallprompt", (ev) => { ev.preventDefault(); offer = ev; btn.style.display = ""; });
+  window.addEventListener("appinstalled", () => { offer = null; btn.style.display = "none"; });
+  btn.onclick = async () => {
+    if (!offer) return;
+    offer.prompt();
+    await offer.userChoice;
+    offer = null;
+    btn.style.display = "none";
+  };
+})();
+</script>
+{% endif %}

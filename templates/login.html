@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Login · NetraAttend</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% include "_pwa_head.html" %}
 </head>
 <body>
 <div class="login-wrap">
@@ -20,6 +21,7 @@
     <label class="f" for="p">Password</label>
     <input id="p" name="p" type="password" autocomplete="current-password" required>
     <button class="btn">Sign in</button>
+    {% with style="width:100%;margin-top:10px" %}{% include "_pwa_install.html" %}{% endwith %}
   </form>
 </div>
 </body>
