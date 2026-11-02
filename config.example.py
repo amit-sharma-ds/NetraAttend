@@ -63,7 +63,7 @@ MIN_FACE_PX = 36             # smaller faces are tracked but not recognised ("co
 MIN_ENROLL_FACE_PX = 44      # registration needs a slightly bigger face
 MATCH_THRESHOLD = 0.40       # cosine similarity needed to count a frame as a match
 STRONG_MATCH = 0.55          # a single frame this confident confirms immediately
-MATCH_MARGIN = 0.05          # best match must beat the 2nd-best person by this much
+MATCH_MARGIN = 0.10          # best match must beat the 2nd-best person by this much (0.05 let near-ties through)
 VOTES_NEEDED = 2             # matching frames needed to confirm an identity
 MAX_YAW = 0.65               # skip extreme side profiles (0 = frontal, ~0.5 = 45 degrees)
 MIN_SHARPNESS = 15.0         # skip very blurry face crops

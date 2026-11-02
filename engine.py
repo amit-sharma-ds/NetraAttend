@@ -42,6 +42,12 @@ SKIPPABLE = {"up", "down"}   # hard to get with a camera mounted high
 MIN_ENROLL_SAMPLES = 6
 MAX_SAMPLES_PER_EMP = 40
 MIN_ENROLL_FACE_PX = getattr(config, "MIN_ENROLL_FACE_PX", 60)
+# Wrong names came from unclear faces: looking steeply down / mostly the top of the head,
+# which the detector itself is barely sure of (0.56-0.63, real faces 0.73-0.83). Such frames
+# are not used for recognition - the person is recognised in the next, clearer frame.
+# (Registration keeps its own, looser limits for the up / down poses.)
+REC_MIN_DETECTION = getattr(config, "REC_MIN_DETECTION", 0.65)
+MAX_PITCH = getattr(config, "MAX_PITCH", 0.35)
 ENROLL_IDLE_TIMEOUT = 180
 
 TRACK_EXPIRY = 1.5     # seconds a track survives without a detection
@@ -58,8 +64,10 @@ WEAK_MARGIN = 0.12
 
 # Auto-learning: confident recognitions occasionally add a fresh sample, so the
 # stored face follows slow changes (beard, glasses, haircut, lighting).
-AUTO_LEARN_SCORE = 0.45
-AUTO_LEARN_MARGIN = 0.20
+AUTO_LEARN_SCORE = 0.55       # a wrongly learned face would make others match this person,
+AUTO_LEARN_MARGIN = 0.25      # so only very sure, near-frontal recognitions are learned
+AUTO_LEARN_MAX_YAW = 0.35
+AUTO_LEARN_MAX_PITCH = 0.25
 AUTO_LEARN_NOVELTY = 0.80    # only add views that differ from what is stored
 AUTO_LEARN_EVERY = 600       # seconds between auto samples per person
 AUTO_SAMPLES_MAX = 15        # oldest auto samples are replaced
@@ -554,6 +562,7 @@ class Engine:
         """Store a fresh sample of a confidently recognised person (see AUTO_LEARN_*)."""
         now = time.monotonic()
         if (score < AUTO_LEARN_SCORE or margin < AUTO_LEARN_MARGIN or cand["q"] < 0.4
+                or abs(cand["yaw"]) > AUTO_LEARN_MAX_YAW or abs(cand["pitch"]) > AUTO_LEARN_MAX_PITCH
                 or now - self.last_learn.get(emp_id, -1e9) < AUTO_LEARN_EVERY
                 or self.gallery.best_own(emp_id, emb) >= AUTO_LEARN_NOVELTY):
             return
@@ -647,6 +656,8 @@ class Engine:
                             if face.width >= MIN_ENROLL_FACE_PX:
                                 cand["pose"] = pose_bin(yaw, pitch)
                                 enroll.offer(cand)
+                        elif face.score < REC_MIN_DETECTION or pitch > MAX_PITCH:
+                            pass   # unclear face (looking down, half hidden): wait for a better frame
                         elif tr.cand is None or q > tr.cand["q"]:
                             tr.cand = cand
                 overlay.append((face.bbox.copy(), *self._label(tr, face, enroll)))
