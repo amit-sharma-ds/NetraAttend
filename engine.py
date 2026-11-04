@@ -9,6 +9,7 @@ Pipeline (each stage in its own thread so the live view never waits on AI):
                      votes over frames, marks attendance once confirmed
   stream thread   -> draws boxes/names on the newest frame for the browser
 """
+import json
 import threading
 import time
 import traceback
@@ -340,8 +341,7 @@ class Streamer:
                     self._text(img, _ascii(label), (x1, max(18, y1 - 4)), 0.55, (255, 255, 255), 1, color)
             for i, (_, text, color) in enumerate(banners[-3:]):
                 self._text(img, _ascii(text), (14, 34 + i * 36), 0.75, (255, 255, 255), 2, color)
-            tag = "IN camera 2  " if eng.main is not None and eng.role == "in" else \
-                {"in": "IN camera  ", "out": "OUT camera  "}.get(eng.direction, "")
+            tag = eng.name + "  " if eng.name else {"in": "IN camera  ", "out": "OUT camera  "}.get(eng.direction, "")
             st = f"{tag}{datetime.now():%H:%M:%S}  cam {cam.fps:.0f}fps  ai {eng.det_fps:.1f}fps"
             self._text(img, st, (10, img.shape[0] - 8), 0.45, (255, 255, 255), 1, (40, 40, 40))
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(config.STREAM_QUALITY)])
@@ -368,18 +368,19 @@ def jpeg(img, quality=85):
 
 
 class Engine:
-    def __init__(self, main=None, url=None, role="out"):
+    def __init__(self, main=None, url=None, role="out", cam_id=None):
         """main=None: the main camera (the only one, or the entrance camera).
-        main=<Engine>: an extra camera - the exit camera (role "out") or a second entrance
-        camera (role "in") - with its own camera, tracking and live view, sharing the main
-        engine's models, registered faces and attendance recorder (so a person seen by
-        both entrance cameras still gets one IN per day)."""
+        main=<Engine>: an extra camera - the OUT camera of Settings, or one added with +
+        (cam_id, role "in" or "out") - with its own camera, tracking and live view, sharing
+        the main engine's models, registered faces and attendance recorder (so a person
+        seen by several entrance cameras still gets one IN per day)."""
         self.main = main
         self.role = role
+        self.cam_id = cam_id
+        self.name = ""               # display name of an added camera, e.g. "IN camera 2"
         self.out = None              # exit camera pipeline (main engine only)
         self.out_url = ""            # exit camera link in use ("" = only one camera)
-        self.in2 = None              # second entrance camera pipeline (main engine only)
-        self.in2_url = ""
+        self.extras = {}             # cameras added with + in Settings: id -> Engine (main only)
         self.camera_lock = threading.Lock()
         if main is None:
             self.camera = self._make_camera(self.camera_url())
@@ -390,7 +391,7 @@ class Engine:
             self.recent = deque(maxlen=40)
             self.last_learn = {}     # emp_id -> monotonic time of last auto sample
         else:
-            self.camera = self._make_camera(url, "out_camera_ok_url" if role == "out" else "in2_camera_ok_url")
+            self.camera = self._make_camera(url, f"camera_ok_{cam_id}" if cam_id else "out_camera_ok_url")
             self.detector, self.embedder = main.detector, main.embedder
             self.gallery, self.recorder = main.gallery, main.recorder
             self.recent, self.last_learn = main.recent, main.last_learn
@@ -417,7 +418,8 @@ class Engine:
         """None = one camera marks IN and OUT; "in"/"out" = entrance/exit camera."""
         if self.main is not None:
             return self.role
-        return "in" if self.out_url else None
+        has_out = self.out_url or any(e.role == "out" for e in list(self.extras.values()))
+        return "in" if has_out else None
 
     # ------------------------------------------------------------ lifecycle
     def start(self, with_camera=True):
@@ -434,8 +436,8 @@ class Engine:
             threading.Thread(target=self._flush_loop, daemon=True, name="db-retry").start()
             if with_camera and self.out_camera_url():
                 self.set_out_camera(self.out_camera_url())
-            if with_camera and self.in2_camera_url():
-                self.set_in2_camera(self.in2_camera_url())
+            if with_camera:
+                self.sync_extras()
 
     def stop(self):
         self.running = False
@@ -444,8 +446,8 @@ class Engine:
         self.camera.stop()
         if self.out is not None:
             self.out.stop()
-        if self.in2 is not None:
-            self.in2.stop()
+        for extra in list(self.extras.values()):
+            extra.stop()
 
     def _flush_loop(self):
         last_sync = time.monotonic()
@@ -469,10 +471,7 @@ class Engine:
                     if str(self.out_camera_url()) != out_now:
                         print("OUT camera changed in Settings - switching", flush=True)
                         self.set_out_camera(self.out_camera_url())
-                    in2_now = str(self.in2.camera.source) if self.in2 is not None else ""
-                    if str(self.in2_camera_url()) != in2_now:
-                        print("Second IN camera changed in Settings - switching", flush=True)
-                        self.set_in2_camera(self.in2_camera_url())
+                    self.sync_extras()   # cameras added / changed with + (also from the cloud site)
             except Exception:
                 traceback.print_exc()
 
@@ -488,9 +487,23 @@ class Engine:
         return get_settings().get("out_camera_url") or getattr(config, "OUT_CAMERA", "") or ""
 
     @staticmethod
-    def in2_camera_url():
-        """Second entrance (IN) camera, setting "in2_camera_url", else config.IN2_CAMERA; "" = none."""
-        return get_settings().get("in2_camera_url") or getattr(config, "IN2_CAMERA", "") or ""
+    def extra_cameras():
+        """Cameras added with + in the IN / OUT camera cards of Settings:
+        [{"id", "url", "role": "in" | "out"}] (setting "extra_cameras", JSON)."""
+        try:
+            return [c for c in json.loads(get_settings().get("extra_cameras") or "[]") if c.get("url")]
+        except (ValueError, TypeError, AttributeError):
+            return []
+
+    @staticmethod
+    def camera_names(cams, has_out):
+        """Display names of the added cameras: IN camera 2, 3 ... and OUT camera (2) ..."""
+        names, count = {}, {"in": 1, "out": 1 if has_out else 0}
+        for c in cams:
+            count[c["role"]] += 1
+            n = count[c["role"]]
+            names[c["id"]] = f"{c['role'].upper()} camera" + (f" {n}" if n > 1 else "")
+        return names
 
     @staticmethod
     def _make_camera(url, ok_key="camera_ok_url"):
@@ -528,17 +541,28 @@ class Engine:
             for tr in self.tracks.values():   # IN/OUT meaning of this camera changed
                 tr.result = None
 
-    def set_in2_camera(self, url):
-        """Add, switch or remove (url "") the second entrance camera without restarting."""
+    def sync_extras(self):
+        """Start, switch or stop the cameras added with + so they match the Settings list."""
+        cams = self.extra_cameras()
+        names = self.camera_names(cams, bool(self.out_url))
+        want = {c["id"]: c for c in cams}
+        before = self.direction
         with self.camera_lock:
-            old, self.in2 = self.in2, None
-            self.in2_url = url or ""
-            if old is not None:
-                old.stop()
-            if url:
-                in2 = Engine(main=self, url=url, role="in")
-                in2.start()
-                self.in2 = in2
+            for cid, eng in list(self.extras.items()):
+                c = want.get(cid)
+                if c is None or str(c["url"]) != str(eng.camera.source) or c["role"] != eng.role:
+                    del self.extras[cid]
+                    eng.stop()
+            for cid, c in want.items():
+                if cid not in self.extras:
+                    eng = Engine(main=self, url=c["url"], role=c["role"], cam_id=cid)
+                    eng.start()
+                    self.extras[cid] = eng
+                self.extras[cid].name = names[cid]
+        if self.direction != before:
+            with self.lock:
+                for tr in self.tracks.values():   # IN/OUT meaning of the main camera changed
+                    tr.result = None
 
     # ------------------------------------------------------------ gallery
     @staticmethod
@@ -580,7 +604,7 @@ class Engine:
         self.gallery.set([(i, n, c, np.stack(m)) for i, n, c, m in groups])
         if not reset_tracks:
             return
-        for eng in (self, self.out, self.in2):
+        for eng in (self, self.out, *list(self.extras.values())):
             if eng is None:
                 continue
             with eng.lock:
@@ -916,7 +940,7 @@ class Engine:
         if snap is None:
             return
         when = datetime.now()
-        suffix = "_out" if self.direction == "out" else "_in2" if self.main is not None else ""
+        suffix = (f"_{self.cam_id}" if self.cam_id else "") + ("_out" if self.direction == "out" else "")
         key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S%f}"[:-3] + suffix + ".jpg"
         try:
             put_photo(key, snap, None)
@@ -1075,7 +1099,7 @@ class Engine:
         with self.lock:
             tracks = len(self.tracks)
             recent = list(self.recent)[:15]
-        out, in2 = self.out, self.in2
+        out = self.out
         return {
             "camera": self.camera.status(),
             "det_fps": round(self.det_fps, 1),
@@ -1089,8 +1113,8 @@ class Engine:
             "out_camera": out.camera.status() if out is not None else None,
             "out_det_fps": round(out.det_fps, 1) if out is not None else None,
             "out_faces": len(out.tracks) if out is not None else None,
-            # second entrance camera: None when not set
-            "in2_camera": in2.camera.status() if in2 is not None else None,
-            "in2_det_fps": round(in2.det_fps, 1) if in2 is not None else None,
-            "in2_faces": len(in2.tracks) if in2 is not None else None,
+            # cameras added with + in Settings
+            "extras": [{"id": cid, "name": e.name, "role": e.role, "camera": e.camera.status(),
+                        "det_fps": round(e.det_fps, 1), "faces": len(e.tracks)}
+                       for cid, e in list(self.extras.items())],
         }

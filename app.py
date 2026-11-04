@@ -6,6 +6,7 @@ Open: http://<this-pc-ip>:5000
 import atexit
 import hmac
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -270,8 +271,14 @@ def dashboard():
 @app.route("/live")
 @admin_required
 def live():
-    return render_template("live.html", has_out=bool(engine.out_camera_url()),
-                           has_in2=bool(engine.in2_camera_url()))
+    return render_template("live.html", has_out=bool(engine.out_camera_url()), extras=extra_camera_list())
+
+
+def extra_camera_list():
+    """Cameras added with + in Settings, with their display names (also on the cloud server)."""
+    cams = engine.extra_cameras()
+    names = engine.camera_names(cams, bool(engine.out_camera_url()))
+    return [dict(c, name=names[c["id"]]) for c in cams]
 
 
 def still_jpg(line1, line2):
@@ -396,7 +403,8 @@ def live_sender():
                 if now - last_stats >= 2:
                     last_stats = now
                     live_put("status", stats=engine.stats())
-                for key, eng in (("frame_in", engine), ("frame_out", engine.out), ("frame_in2", engine.in2)):
+                extras = [(f"frame_{cid}", e) for cid, e in list(engine.extras.items())]
+                for key, eng in [("frame_in", engine), ("frame_out", engine.out)] + extras:
                     if eng is None:
                         continue
                     eng.streamer.last_client = now    # keep its live view rendering
@@ -437,16 +445,19 @@ def video_feed_out():
                     headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
 
-@app.route("/video_feed/in2")
+@app.route("/video_feed/cam/<cam_id>")
 @admin_required
-def video_feed_in2():
-    in2 = engine.in2
+def video_feed_cam(cam_id):
+    """Live view of a camera added with + in Settings."""
+    if not re.fullmatch(r"[a-z0-9]{1,12}", cam_id):
+        abort(404)
     if WEB_ONLY:
-        return Response(cloud_frames("frame_in2"), mimetype="multipart/x-mixed-replace; boundary=frame",
+        return Response(cloud_frames(f"frame_{cam_id}"), mimetype="multipart/x-mixed-replace; boundary=frame",
                         headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
-    if in2 is None:
-        return still_image("No second IN camera", "Not set")
-    return Response(in2.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+    eng = engine.extras.get(cam_id)
+    if eng is None:
+        return still_image("Camera not running", "Check it in Settings")
+    return Response(eng.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
                     headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
 
@@ -907,10 +918,16 @@ def settings():
     cam = engine.camera_url()
     out_cam = engine.out_camera_url()
     shown_out = out_cam or cam   # not set yet: start from the IN camera's link - only the IP needs changing
-    return render_template("settings.html", s=s, off=off, weekdays=WEEKDAYS, stats=engine.stats(),
+    stats = engine.stats()
+    running = {x["id"]: x["camera"] for x in stats.get("extras", [])}
+    extra_cams = [dict(c, link=mask_url(c["url"]), ip=camera_host(c["url"]), status=running.get(c["id"]))
+                  for c in extra_camera_list()]
+    return render_template("settings.html", s=s, off=off, weekdays=WEEKDAYS, stats=stats,
                            camera=mask_url(cam), camera_ip=camera_host(cam), db_name=config.MONGO_DB,
                            out_set=bool(out_cam), out_camera=mask_url(shown_out),
-                           out_camera_ip=camera_host(shown_out))
+                           out_camera_ip=camera_host(shown_out),
+                           extra_in=[c for c in extra_cams if c["role"] == "in"],
+                           extra_out=[c for c in extra_cams if c["role"] == "out"])
 
 
 def camera_host(url):
@@ -1028,6 +1045,83 @@ def out_camera_settings():
     else:
         engine.set_out_camera(new)
         flash(f"OUT camera set to {mask_url(new)} - connecting...", "success")
+    return redirect(back)
+
+
+@app.route("/settings/cameras/<cam_id>", methods=["POST"])
+@admin_required
+def extra_camera_settings(cam_id):
+    """+ in the IN / OUT camera cards of Settings: add another camera of that type
+    (cam_id "new"), change its IP / link, or remove it. IN cameras mark IN - once per
+    person per day across all IN cameras; OUT cameras mark every OUT. Same IP / link
+    rules as the OUT camera form."""
+    cams = engine.extra_cameras()
+    cam = next((c for c in cams if c["id"] == cam_id), None)
+    role = cam["role"] if cam else ("out" if request.form.get("role") == "out" else "in")
+    anchor = "#out-camera" if role == "out" else "#camera"
+    back = url_for("settings") + anchor
+    keep = url_for("settings", keep=cam_id if cam else f"new-{role}") + anchor   # failed: show what was typed again
+    if cam is None and cam_id != "new":
+        flash("That camera is not in the list any more.", "error")
+        return redirect(back)
+    if request.form.get("remove") and cam is not None:
+        save_settings({"extra_cameras": json.dumps([c for c in cams if c["id"] != cam_id])})
+        if not WEB_ONLY:
+            engine.sync_extras()
+        flash(f"Camera {camera_host(cam['url'])} removed.", "success")
+        return redirect(back)
+    current = cam["url"] if cam else ""
+    in_cam = str(engine.camera_url())
+    out_cam = str(engine.out_camera_url())
+    ip = request.form.get("camera_ip", "").strip()
+    link = request.form.get("camera_link", "").strip()
+    if ip == request.form.get("shown_ip", "").strip():
+        ip = ""    # IP box left as pre-filled: the link decides (so editing only the link works too)
+    new = current
+    if link and link != mask_url(current):
+        # password left masked (***): keep the saved one - this camera's, else the IN camera's
+        saved_pwd = re.search(r"://[^:/@]+:([^@]*)@", current) or re.search(r"://[^:/@]+:([^@]*)@", in_cam)
+        if ":***@" in link and saved_pwd:
+            link = link.replace(":***@", f":{saved_pwd.group(1)}@", 1)
+        new = link
+    if ip and ip != camera_host(new):
+        if not re.fullmatch(r"[A-Za-z0-9.\-]+", ip):
+            flash("Camera IP looks wrong, e.g. 192.168.1.194", "error")
+            return redirect(keep)
+        base = new or in_cam   # only an IP typed: same user, password, port and path as the IN camera
+        if not base.startswith("rtsp://"):
+            flash("Type the camera's full RTSP link.", "error")
+            return redirect(keep)
+        new = with_host(base, ip)
+    if not new:
+        flash("Type the camera's IP or its full RTSP link.", "error")
+        return redirect(keep)
+    if not (new.startswith(("rtsp://", "rtsps://", "http://", "https://")) or new.isdigit()):
+        flash("Camera link must start with rtsp://", "error")
+        return redirect(keep)
+    if new == in_cam or same_camera(new, in_cam):
+        flash("This is the main camera already - type the new camera's IP.", "error")
+        return redirect(keep)
+    if out_cam and (new == out_cam or same_camera(new, out_cam)):
+        flash("This is the OUT camera already - type the new camera's IP.", "error")
+        return redirect(keep)
+    if any(c["id"] != cam_id and (c["url"] == new or same_camera(new, c["url"])) for c in cams):
+        flash("This camera is already in the list.", "error")
+        return redirect(keep)
+    if cam is not None and new == current and role == cam["role"]:
+        flash("Camera unchanged.", "info")
+        return redirect(back)
+    if cam is None:
+        cams.append({"id": secrets.token_hex(3), "url": new, "role": role})
+    else:
+        cam.update(url=new, role=role)
+    save_settings({"extra_cameras": json.dumps(cams)})
+    what = f"{role.upper()} camera {mask_url(new)} " + ("added" if cam is None else "saved")
+    if WEB_ONLY:
+        flash(f"{what}. The office PC connects to it within a minute.", "success")
+    else:
+        engine.sync_extras()
+        flash(f"{what} - connecting...", "success")
     return redirect(back)
 
 
@@ -1353,8 +1447,8 @@ def camera_release():
     engine.camera.stop()
     if engine.out is not None:
         engine.out.camera.stop()
-    if engine.in2 is not None:
-        engine.in2.camera.stop()
+    for extra in list(engine.extras.values()):
+        extra.camera.stop()
     return jsonify(ok=True)
 
 
