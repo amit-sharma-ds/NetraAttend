@@ -270,7 +270,8 @@ def dashboard():
 @app.route("/live")
 @admin_required
 def live():
-    return render_template("live.html", has_out=bool(engine.out_camera_url()))
+    return render_template("live.html", has_out=bool(engine.out_camera_url()),
+                           has_in2=bool(engine.in2_camera_url()))
 
 
 def still_jpg(line1, line2):
@@ -395,7 +396,7 @@ def live_sender():
                 if now - last_stats >= 2:
                     last_stats = now
                     live_put("status", stats=engine.stats())
-                for key, eng in (("frame_in", engine), ("frame_out", engine.out)):
+                for key, eng in (("frame_in", engine), ("frame_out", engine.out), ("frame_in2", engine.in2)):
                     if eng is None:
                         continue
                     eng.streamer.last_client = now    # keep its live view rendering
@@ -433,6 +434,19 @@ def video_feed_out():
     if out is None:
         return still_image("No OUT camera", "Add one in Settings")
     return Response(out.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
+
+
+@app.route("/video_feed/in2")
+@admin_required
+def video_feed_in2():
+    in2 = engine.in2
+    if WEB_ONLY:
+        return Response(cloud_frames("frame_in2"), mimetype="multipart/x-mixed-replace; boundary=frame",
+                        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
+    if in2 is None:
+        return still_image("No second IN camera", "Not set")
+    return Response(in2.streamer.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
                     headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
 
@@ -1339,6 +1353,8 @@ def camera_release():
     engine.camera.stop()
     if engine.out is not None:
         engine.out.camera.stop()
+    if engine.in2 is not None:
+        engine.in2.camera.stop()
     return jsonify(ok=True)
 
 

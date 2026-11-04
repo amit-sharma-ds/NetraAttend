@@ -340,7 +340,8 @@ class Streamer:
                     self._text(img, _ascii(label), (x1, max(18, y1 - 4)), 0.55, (255, 255, 255), 1, color)
             for i, (_, text, color) in enumerate(banners[-3:]):
                 self._text(img, _ascii(text), (14, 34 + i * 36), 0.75, (255, 255, 255), 2, color)
-            tag = {"in": "IN camera  ", "out": "OUT camera  "}.get(eng.direction, "")
+            tag = "IN camera 2  " if eng.main is not None and eng.role == "in" else \
+                {"in": "IN camera  ", "out": "OUT camera  "}.get(eng.direction, "")
             st = f"{tag}{datetime.now():%H:%M:%S}  cam {cam.fps:.0f}fps  ai {eng.det_fps:.1f}fps"
             self._text(img, st, (10, img.shape[0] - 8), 0.45, (255, 255, 255), 1, (40, 40, 40))
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(config.STREAM_QUALITY)])
@@ -367,13 +368,18 @@ def jpeg(img, quality=85):
 
 
 class Engine:
-    def __init__(self, main=None, url=None):
+    def __init__(self, main=None, url=None, role="out"):
         """main=None: the main camera (the only one, or the entrance camera).
-        main=<Engine>: the exit camera - its own camera, tracking and live view, sharing
-        the main engine's models, registered faces and attendance recorder."""
+        main=<Engine>: an extra camera - the exit camera (role "out") or a second entrance
+        camera (role "in") - with its own camera, tracking and live view, sharing the main
+        engine's models, registered faces and attendance recorder (so a person seen by
+        both entrance cameras still gets one IN per day)."""
         self.main = main
+        self.role = role
         self.out = None              # exit camera pipeline (main engine only)
         self.out_url = ""            # exit camera link in use ("" = only one camera)
+        self.in2 = None              # second entrance camera pipeline (main engine only)
+        self.in2_url = ""
         self.camera_lock = threading.Lock()
         if main is None:
             self.camera = self._make_camera(self.camera_url())
@@ -384,7 +390,7 @@ class Engine:
             self.recent = deque(maxlen=40)
             self.last_learn = {}     # emp_id -> monotonic time of last auto sample
         else:
-            self.camera = self._make_camera(url, "out_camera_ok_url")
+            self.camera = self._make_camera(url, "out_camera_ok_url" if role == "out" else "in2_camera_ok_url")
             self.detector, self.embedder = main.detector, main.embedder
             self.gallery, self.recorder = main.gallery, main.recorder
             self.recent, self.last_learn = main.recent, main.last_learn
@@ -410,7 +416,7 @@ class Engine:
     def direction(self):
         """None = one camera marks IN and OUT; "in"/"out" = entrance/exit camera."""
         if self.main is not None:
-            return "out"
+            return self.role
         return "in" if self.out_url else None
 
     # ------------------------------------------------------------ lifecycle
@@ -428,6 +434,8 @@ class Engine:
             threading.Thread(target=self._flush_loop, daemon=True, name="db-retry").start()
             if with_camera and self.out_camera_url():
                 self.set_out_camera(self.out_camera_url())
+            if with_camera and self.in2_camera_url():
+                self.set_in2_camera(self.in2_camera_url())
 
     def stop(self):
         self.running = False
@@ -436,6 +444,8 @@ class Engine:
         self.camera.stop()
         if self.out is not None:
             self.out.stop()
+        if self.in2 is not None:
+            self.in2.stop()
 
     def _flush_loop(self):
         last_sync = time.monotonic()
@@ -459,6 +469,10 @@ class Engine:
                     if str(self.out_camera_url()) != out_now:
                         print("OUT camera changed in Settings - switching", flush=True)
                         self.set_out_camera(self.out_camera_url())
+                    in2_now = str(self.in2.camera.source) if self.in2 is not None else ""
+                    if str(self.in2_camera_url()) != in2_now:
+                        print("Second IN camera changed in Settings - switching", flush=True)
+                        self.set_in2_camera(self.in2_camera_url())
             except Exception:
                 traceback.print_exc()
 
@@ -472,6 +486,11 @@ class Engine:
     def out_camera_url():
         """Exit (OUT) camera from the Settings page, else config.OUT_CAMERA; "" = none."""
         return get_settings().get("out_camera_url") or getattr(config, "OUT_CAMERA", "") or ""
+
+    @staticmethod
+    def in2_camera_url():
+        """Second entrance (IN) camera, setting "in2_camera_url", else config.IN2_CAMERA; "" = none."""
+        return get_settings().get("in2_camera_url") or getattr(config, "IN2_CAMERA", "") or ""
 
     @staticmethod
     def _make_camera(url, ok_key="camera_ok_url"):
@@ -508,6 +527,18 @@ class Engine:
         with self.lock:
             for tr in self.tracks.values():   # IN/OUT meaning of this camera changed
                 tr.result = None
+
+    def set_in2_camera(self, url):
+        """Add, switch or remove (url "") the second entrance camera without restarting."""
+        with self.camera_lock:
+            old, self.in2 = self.in2, None
+            self.in2_url = url or ""
+            if old is not None:
+                old.stop()
+            if url:
+                in2 = Engine(main=self, url=url, role="in")
+                in2.start()
+                self.in2 = in2
 
     # ------------------------------------------------------------ gallery
     @staticmethod
@@ -549,7 +580,7 @@ class Engine:
         self.gallery.set([(i, n, c, np.stack(m)) for i, n, c, m in groups])
         if not reset_tracks:
             return
-        for eng in (self, self.out):
+        for eng in (self, self.out, self.in2):
             if eng is None:
                 continue
             with eng.lock:
@@ -885,7 +916,8 @@ class Engine:
         if snap is None:
             return
         when = datetime.now()
-        key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S%f}"[:-3] + ("_out" if self.direction == "out" else "") + ".jpg"
+        suffix = "_out" if self.direction == "out" else "_in2" if self.main is not None else ""
+        key = f"unknown/{when:%Y-%m-%d}/{when:%H%M%S%f}"[:-3] + suffix + ".jpg"
         try:
             put_photo(key, snap, None)
         except Exception as exc:
@@ -1043,7 +1075,7 @@ class Engine:
         with self.lock:
             tracks = len(self.tracks)
             recent = list(self.recent)[:15]
-        out = self.out
+        out, in2 = self.out, self.in2
         return {
             "camera": self.camera.status(),
             "det_fps": round(self.det_fps, 1),
@@ -1057,4 +1089,8 @@ class Engine:
             "out_camera": out.camera.status() if out is not None else None,
             "out_det_fps": round(out.det_fps, 1) if out is not None else None,
             "out_faces": len(out.tracks) if out is not None else None,
+            # second entrance camera: None when not set
+            "in2_camera": in2.camera.status() if in2 is not None else None,
+            "in2_det_fps": round(in2.det_fps, 1) if in2 is not None else None,
+            "in2_faces": len(in2.tracks) if in2 is not None else None,
         }
