@@ -16,7 +16,7 @@
 
 <nav class="subnav">
   <a href="#today">Today</a>{% if field_allowed %}<a href="#field">Field</a>{% endif %}
-  <a href="#calendar">Calendar</a><a href="#leave">Leave</a><a href="#correction">Correction</a>
+  <a href="#calendar">Calendar</a><a href="#leave">Leave</a><a href="#wfh">WFH</a><a href="#correction">Correction</a>
   <a href="#history">History</a><a href="#profile">Profile</a>
 </nav>
 
@@ -135,6 +135,25 @@
   </table></div>
 </div>
 
+<div class="card" id="wfh">
+  <h3>Work from home (WFH) request</h3>
+  <p class="small muted">Worked from home? Send a request; when the admin approves it, that day is marked WFH (last 30 days).</p>
+  <form method="post" action="{{ url_for('my_correction') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="kind" value="wfh">
+    <div><label class="f" for="wfhDate">Date</label><input type="date" name="date" id="wfhDate" required></div>
+    <div style="grid-column:1/-1"><label class="f" for="wfhReason">Reason</label><input name="reason" id="wfhReason" maxlength="300" required placeholder="e.g. worked from home, approved by manager"></div>
+    <div><button class="btn">Send WFH request</button></div>
+  </form>
+  <div class="table-wrap" style="margin-top:14px"><table class="table">
+    <thead><tr><th>Date</th><th>Reason</th><th>Status</th><th>Admin note</th></tr></thead>
+    <tbody>{% for c in corrections if c.kind == 'wfh' %}<tr>
+      <td class="num">{{ c.date }}</td><td class="small">{{ c.reason }}</td>
+      <td><span class="badge b-{{ c.status }}">{{ c.status|capitalize }}</span></td><td class="small">{{ c.admin_note or '' }}</td>
+    </tr>{% else %}<tr><td colspan="4" class="empty">No WFH requests.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+
 <div class="card" id="correction">
   <h3>Attendance correction</h3>
   <p class="small muted">Camera missed you, or you forgot to mark OUT? Ask the admin to fix that day (last 30 days).</p>
@@ -143,13 +162,12 @@
     <div><label class="f" for="crDate">Date</label><input type="date" name="date" id="crDate" required></div>
     <div><label class="f" for="crIn">Correct IN time</label><input type="time" name="check_in" id="crIn"></div>
     <div><label class="f" for="crOut">Correct OUT time</label><input type="time" name="check_out" id="crOut"></div>
-    <div style="grid-column:1/-1"><label class="f"><input type="checkbox" name="kind" value="wfh" style="width:auto"> Work from home that day (IN/OUT times not needed)</label></div>
     <div style="grid-column:1/-1"><label class="f" for="crReason">Reason</label><input name="reason" id="crReason" maxlength="300" required placeholder="e.g. came with a cap, camera did not see me"></div>
     <div><button class="btn">Send request</button></div>
   </form>
   <div class="table-wrap" style="margin-top:14px"><table class="table">
     <thead><tr><th>Date</th><th>IN</th><th>OUT</th><th>Reason</th><th>Status</th><th>Admin note</th></tr></thead>
-    <tbody>{% for c in corrections %}<tr>
+    <tbody>{% for c in corrections if c.kind != 'wfh' %}<tr>
       <td class="num">{{ c.date }}</td><td class="num">{{ c.check_in or '-' }}</td><td class="num">{{ c.check_out or '-' }}</td>
       <td class="small">{{ c.reason }}</td><td><span class="badge b-{{ c.status }}">{{ c.status|capitalize }}</span></td>
       <td class="small">{{ c.admin_note or '' }}</td>
