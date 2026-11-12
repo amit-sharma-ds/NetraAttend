@@ -35,7 +35,8 @@
     <thead><tr><th>Employee</th><th>Date</th><th>Correct IN</th><th>Correct OUT</th><th>Reason</th><th>Decision</th></tr></thead>
     <tbody>{% for r in corr_p %}<tr>
       <td><b>{{ r.name }}</b> <span class="small muted">{{ r.code }}</span><div class="small muted">applied {{ r.applied_at[5:16] }}</div></td>
-      <td class="num">{{ r.date }}</td><td class="num">{{ r.check_in or 'keep' }}</td><td class="num">{{ r.check_out or 'keep' }}</td>
+      <td class="num">{{ r.date }}</td>
+      {% if r.kind == 'wfh' %}<td colspan="2"><span class="tag">Work from home</span></td>{% else %}<td class="num">{{ r.check_in or 'keep' }}</td><td class="num">{{ r.check_out or 'keep' }}</td>{% endif %}
       <td class="small">{{ r.reason }}</td>
       <td>
         <form method="post" class="row" style="gap:6px">
@@ -57,7 +58,7 @@
     <tbody>
     {% for r in leaves_d %}<tr><td>{{ r.name }}</td><td>{{ r.type }} · {{ r['from'] }}{% if r.to != r['from'] %} → {{ r.to }}{% endif %} ({{ '%g'|format(r.days) }}d)</td>
       <td><span class="badge b-{{ r.status }}">{{ r.status|capitalize }}</span></td><td class="small">{{ r.admin_note }}</td><td class="small muted">{{ (r.decided_at or '')[5:16] }}</td></tr>{% endfor %}
-    {% for r in corr_d %}<tr><td>{{ r.name }}</td><td>Correction · {{ r.date }} IN {{ r.check_in or 'keep' }} / OUT {{ r.check_out or 'keep' }}</td>
+    {% for r in corr_d %}<tr><td>{{ r.name }}</td><td>{% if r.kind == 'wfh' %}Work from home · {{ r.date }}{% else %}Correction · {{ r.date }} IN {{ r.check_in or 'keep' }} / OUT {{ r.check_out or 'keep' }}{% endif %}</td>
       <td><span class="badge b-{{ r.status }}">{{ r.status|capitalize }}</span></td><td class="small">{{ r.admin_note }}</td><td class="small muted">{{ (r.decided_at or '')[5:16] }}</td></tr>{% endfor %}
     {% if not leaves_d and not corr_d %}<tr><td colspan="5" class="empty">Nothing yet.</td></tr>{% endif %}
     </tbody>

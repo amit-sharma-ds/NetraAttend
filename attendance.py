@@ -317,6 +317,18 @@ def manual_entry(emp_id, day, check_in, check_out, note):
         upsert=True)
 
 
+def mark_day(emp_id, day, kind, note):
+    """Admin marks a day present (kind="present") or work-from-home (kind="wfh").
+    The IN time is set to office start so the day counts as attended."""
+    start = Rules().office_start.strftime("%H:%M:%S")
+    db().attendance.update_one(
+        {"emp_id": emp_id, "date": day},
+        {"$set": {"check_in": start, "check_out": None,
+                  "source": "wfh" if kind == "wfh" else "manual", "note": note[:200]},
+         "$setOnInsert": {"in_photo": None, "out_photo": None, "in_score": None}},
+        upsert=True)
+
+
 def _daterange(start, end):
     d = start
     while d <= end:
@@ -525,8 +537,28 @@ def request_correction(emp_id, day, check_in, check_out, reason):
                                  "applied_at": now_str(), "decided_at": None, "admin_note": ""})
 
 
+def request_wfh(emp_id, day, reason):
+    """Employee asks the admin to mark a day as work-from-home (stored with kind "wfh")."""
+    today = date.today()
+    if day > today:
+        raise ValueError("A future date can't be marked.")
+    if day < today - timedelta(days=30):
+        raise ValueError("Only the last 30 days can be requested.")
+    if not reason.strip():
+        raise ValueError("Write a reason.")
+    if db().corrections.find_one({"emp_id": emp_id, "date": day.isoformat(), "status": "pending"}):
+        raise ValueError("You already have a pending request for this date.")
+    db().corrections.insert_one({"emp_id": emp_id, "date": day.isoformat(), "kind": "wfh",
+                                 "check_in": "", "check_out": "", "reason": reason.strip()[:300],
+                                 "status": "pending", "applied_at": now_str(), "decided_at": None,
+                                 "admin_note": ""})
+
+
 def apply_correction(req):
     """Admin approved a correction: write it as a manual entry for that day."""
+    if req.get("kind") == "wfh":
+        mark_day(req["emp_id"], req["date"], "wfh", f"WFH approved: {req['reason']}")
+        return
     row = db().attendance.find_one({"emp_id": req["emp_id"], "date": req["date"]}) or {}
     cin = req.get("check_in") or (row.get("check_in") or "")[:5]
     cout = req.get("check_out") or (row.get("check_out") or "")[:5]
@@ -575,7 +607,7 @@ def build_report(start, end, emp_id=None):
         sm = {"emp_id": emp["id"], "name": emp["name"], "code": emp["emp_code"],
               "department": emp.get("department", ""), "working_days": 0, "present": 0,
               "on_time": 0, "late": 0, "half_day": 0, "absent": 0, "leave": 0.0,
-              "late_min": 0, "hours": 0.0}
+              "late_min": 0, "hours": 0.0, "wfh": 0}
         for d in _daterange(start, end):
             ds = d.isoformat()
             r = recs.get((emp["id"], ds))
@@ -590,7 +622,13 @@ def build_report(start, end, emp_id=None):
                 row["leave"] = lv["type"] + (" (half day)" if lv["half"] else "")
                 if r and lv["half"]:
                     sm["leave"] += 0.5
-            if r:
+            if r and r.get("source") == "wfh":
+                row.update(check_in=_fmt_clock(r["check_in"]), status="WFH", source="wfh",
+                           note=r.get("note", ""))
+                sm["working_days"] += 1
+                sm["present"] += 1
+                sm["wfh"] += 1
+            elif r:
                 ev = rules.evaluate(d, r["check_in"], r.get("check_out"), today)
                 row.update(check_in=_fmt_clock(r["check_in"]), check_out=_fmt_clock(r.get("check_out")),
                            hours=ev["hours"] if ev["hours"] is not None else "",

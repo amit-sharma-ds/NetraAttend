@@ -497,6 +497,25 @@ def api_status():
     return jsonify(live_stats())
 
 
+@app.route("/attendance/mark", methods=["POST"])
+@admin_required
+def attendance_mark():
+    """Dashboard history: mark an absent day as present or work-from-home."""
+    try:
+        emp_id = int(request.form["emp_id"])
+        day = parse_day(request.form.get("date"), None)
+        kind = request.form.get("kind", "")
+        if day is None or kind not in ("present", "wfh"):
+            raise ValueError("Pick a valid date and type.")
+        if day > date.today():
+            raise ValueError("A future date can't be marked.")
+        att.mark_day(emp_id, day.isoformat(), kind,
+                     "Marked WFH by admin" if kind == "wfh" else "Marked present by admin")
+        return jsonify(ok=True)
+    except (KeyError, ValueError) as exc:
+        return jsonify(ok=False, msg=str(exc)), 400
+
+
 @app.route("/attendance/manual", methods=["POST"])
 @admin_required
 def manual_attendance():
@@ -1257,9 +1276,13 @@ def my_correction():
         day = parse_day(f.get("date"), None)
         if day is None:
             raise ValueError("Pick the date.")
-        att.request_correction(session["emp_id"], day, f.get("check_in", "").strip(),
-                               f.get("check_out", "").strip(), f.get("reason", ""))
-        flash("Correction request sent to the admin.", "success")
+        if f.get("kind") == "wfh":
+            att.request_wfh(session["emp_id"], day, f.get("reason", ""))
+            flash("Work-from-home request sent to the admin.", "success")
+        else:
+            att.request_correction(session["emp_id"], day, f.get("check_in", "").strip(),
+                                   f.get("check_out", "").strip(), f.get("reason", ""))
+            flash("Correction request sent to the admin.", "success")
     except ValueError as exc:
         flash(str(exc), "error")
     return redirect(url_for("my") + "#correction")

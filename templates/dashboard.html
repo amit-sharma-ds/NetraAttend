@@ -87,6 +87,13 @@ function openHist(id){
   hist.showModal();
   loadHist();
 }
+const CSRF = "{{ csrf_token() }}";
+async function markDay(day, kind){
+  const body = new URLSearchParams({csrf: CSRF, emp_id: histEmp, date: day, kind});
+  let j; try { j = await (await fetch("/attendance/mark", {method: "POST", body})).json(); } catch(e) { j = null; }
+  if (!j || !j.ok) { alert((j && j.msg) || "Could not mark the day - try again."); return; }
+  loadHist(); refresh();
+}
 async function loadHist(){
   let h; try { h = await (await fetch(`/api/employee/${histEmp}/history?start=${hFrom.value}&end=${hTo.value}`)).json(); } catch(e) { h = null; }
   if (!h || !h.ok) { hRows.innerHTML = `<tr><td colspan="6" class="empty">${esc((h && h.msg) || "Could not load the history - try again.")}</td></tr>`; return; }
@@ -94,13 +101,13 @@ async function loadHist(){
   hFrom.value = h.start; hTo.value = h.end;
   const s = h.summary;
   hSum.innerHTML = [["Present", s.present], ["On time", s.on_time], ["Late", s.late + (s.late_min ? ` (${s.late_min}m)` : "")],
-    ["Half day", s.half_day], ["Absent", s.absent], ["Leave", s.leave], ["Hours", s.hours]]
+    ["Half day", s.half_day], ["WFH", s.wfh], ["Absent", s.absent], ["Leave", s.leave], ["Hours", s.hours]]
     .map(([k, v]) => `<span class="chip">${k} <b>${v ?? 0}</b></span>`).join("");
   hRows.innerHTML = h.rows.map(r => `<tr>
     <td class="num" style="white-space:nowrap"><b>${r.weekday}</b> ${r.date}</td>
     <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
     <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}${r.leave ? `<span class="tag">${esc(r.leave)}</span>` : ""}</td>
-    <td>${moves(r.moves)}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}</td></tr>`).join("")
+    <td>${moves(r.moves)}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}${r.status === "Absent" ? `<div class="row" style="gap:6px;margin-top:4px"><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','present')">Mark present</button><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','wfh')">Mark WFH</button></div>` : ""}</td></tr>`).join("")
     || '<tr><td colspan="6" class="empty">No attendance in these dates.</td></tr>';
 }
 async function refresh(){
