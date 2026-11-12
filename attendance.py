@@ -329,6 +329,12 @@ def mark_day(emp_id, day, kind, note):
         upsert=True)
 
 
+def unmark_day(emp_id, day):
+    """Undo an admin "Mark present" / "Mark WFH" (or an approved WFH). Camera records are kept."""
+    db().attendance.delete_one({"emp_id": emp_id, "date": day, "$or": [
+        {"source": "wfh"}, {"note": {"$regex": "^(Marked |WFH approved)"}}]})
+
+
 def _daterange(start, end):
     d = start
     while d <= end:

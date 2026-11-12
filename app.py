@@ -505,10 +505,13 @@ def attendance_mark():
         emp_id = int(request.form["emp_id"])
         day = parse_day(request.form.get("date"), None)
         kind = request.form.get("kind", "")
-        if day is None or kind not in ("present", "wfh"):
+        if day is None or kind not in ("present", "wfh", "remove"):
             raise ValueError("Pick a valid date and type.")
         if day > date.today():
             raise ValueError("A future date can't be marked.")
+        if kind == "remove":
+            att.unmark_day(emp_id, day.isoformat())
+            return jsonify(ok=True)
         att.mark_day(emp_id, day.isoformat(), kind,
                      "Marked WFH by admin" if kind == "wfh" else "Marked present by admin")
         return jsonify(ok=True)
