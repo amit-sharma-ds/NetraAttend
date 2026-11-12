@@ -831,6 +831,26 @@ def unknown_page():
                            capture_on=unknown_capture_on())
 
 
+@app.route("/unknown/delete", methods=["POST"])
+@admin_required
+def unknown_delete():
+    """Delete unknown-person photos: the ticked ones, or every photo of the day shown
+    (only "unknown/<date>/..." photos - never attendance photos)."""
+    day = parse_day(request.form.get("date"), date.today()).isoformat()
+    d = db()
+    if request.form.get("all") == "1":
+        query = {"_id": {"$regex": f"^unknown/{day}/"}}
+    else:
+        ids = [i for i in request.form.getlist("ids") if re.fullmatch(r"unknown/\d{4}-\d{2}-\d{2}/[\w]+(_out)?\.jpg", i)]
+        if not ids:
+            flash("Select at least one photo to delete.", "error")
+            return redirect(url_for("unknown_page", date=day))
+        query = {"_id": {"$in": ids}}
+    n = d.photos.delete_many(query).deleted_count
+    flash(f"{n} unknown photo(s) deleted.", "success")
+    return redirect(url_for("unknown_page", date=day))
+
+
 @app.route("/unknown/switch", methods=["POST"])
 @admin_required
 def unknown_switch():
