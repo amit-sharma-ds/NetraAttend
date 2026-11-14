@@ -90,7 +90,7 @@ function openHist(id){
 async function markDay(day, kind){
   let note = "";
   if (kind !== "remove") {
-    note = prompt("Note (optional) - e.g. JCI, field visit:", "");
+    note = prompt("Note (optional):", "");
     if (note === null) return;   // Cancel = don't mark
   }
   const body = new URLSearchParams({emp_id: histEmp, date: day, kind, note});
@@ -111,7 +111,7 @@ async function loadHist(){
     <td class="num" style="white-space:nowrap"><b>${r.weekday}</b> ${r.date}</td>
     <td class="num">${r.check_in || "-"}</td><td class="num">${r.check_out || "-"}</td><td class="num">${r.hours || "-"}</td>
     <td><span class="badge ${sc(r.status)}">${r.status}${r.late_min ? " +" + r.late_min + "m" : ""}</span>${r.source === "manual" ? '<span class="tag">manual</span>' : ""}${r.leave ? `<span class="tag">${esc(r.leave)}</span>` : ""}</td>
-    <td>${moves(r.moves)}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}${r.status === "Absent" ? `<div class="row" style="gap:6px;margin-top:4px"><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','present')">Mark present</button><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','wfh')">Mark WFH</button></div>` : ""}${(r.status === "WFH" || (r.note || "").startsWith("Marked ")) ? `<div class="row" style="gap:6px;margin-top:4px"><button class="btn danger sm" type="button" onclick="markDay('${r.date}','remove')">Remove mark (back to absent)</button></div>` : ""}</td></tr>`).join("")
+    <td>${moves(r.moves)}${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ""}${(r.status === "Absent" || r.status === "Not In Yet") ? `<div class="row" style="gap:6px;margin-top:4px"><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','present')">Mark present</button><button class="btn ghost sm" type="button" onclick="markDay('${r.date}','wfh')">Mark WFH</button></div>` : ""}${(r.status === "WFH" || (r.note || "").startsWith("Marked ")) ? `<div class="row" style="gap:6px;margin-top:4px"><button class="btn danger sm" type="button" onclick="markDay('${r.date}','remove')">Remove mark (back to absent)</button></div>` : ""}</td></tr>`).join("")
     || '<tr><td colspan="6" class="empty">No attendance in these dates.</td></tr>';
 }
 async function refresh(){
