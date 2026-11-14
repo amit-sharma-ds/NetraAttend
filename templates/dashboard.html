@@ -88,7 +88,12 @@ function openHist(id){
   loadHist();
 }
 async function markDay(day, kind){
-  const body = new URLSearchParams({emp_id: histEmp, date: day, kind});
+  let note = "";
+  if (kind !== "remove") {
+    note = prompt("Note (optional) - e.g. JCI, field visit:", "");
+    if (note === null) return;   // Cancel = don't mark
+  }
+  const body = new URLSearchParams({emp_id: histEmp, date: day, kind, note});
   let j; try { j = await (await fetch("/attendance/mark", {method: "POST", headers: {"X-CSRF-Token": CSRF}, body})).json(); } catch(e) { j = null; }
   if (!j || !j.ok) { alert((j && j.msg) || "Could not mark the day - try again."); return; }
   loadHist(); refresh();

@@ -512,8 +512,9 @@ def attendance_mark():
         if kind == "remove":
             att.unmark_day(emp_id, day.isoformat())
             return jsonify(ok=True)
-        att.mark_day(emp_id, day.isoformat(), kind,
-                     "Marked WFH by admin" if kind == "wfh" else "Marked present by admin")
+        note = request.form.get("note", "").strip()[:150]
+        base = "Marked WFH by admin" if kind == "wfh" else "Marked present by admin"
+        att.mark_day(emp_id, day.isoformat(), kind, f"{base}: {note}" if note else base)
         return jsonify(ok=True)
     except (KeyError, ValueError) as exc:
         return jsonify(ok=False, msg=str(exc)), 400
